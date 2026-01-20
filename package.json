@@ -1,0 +1,36 @@
+{
+  "name": "ssh-mcp-pro",
+  "version": "1.0.0",
+  "description": "A comprehensive SSH MCP Server for Claude Code",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "ssh-mcp-pro": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["mcp", "ssh", "claude", "remote", "automation"],
+  "author": "pyro",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/user/ssh-mcp-pro"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.3",
+    "ssh2": "^1.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.9",
+    "@types/ssh2": "^1.15.5",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
