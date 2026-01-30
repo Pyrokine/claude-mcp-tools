@@ -7,8 +7,14 @@ use crate::sessions::list_sessions;
 use crate::types::Range;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+
+thread_local! {
+    /// 从客户端 roots 获取的当前项目 ID
+    static CLIENT_PROJECT: RefCell<Option<String>> = const { RefCell::new(None) };
+}
 
 #[derive(Deserialize)]
 struct JsonRpcRequest {
@@ -219,6 +225,14 @@ pub fn run_mcp_server() {
             continue;
         }
 
+        // 尝试解析为响应（来自 roots/list 请求）
+        if let Ok(response) = serde_json::from_str::<Value>(&line) {
+            if response.get("result").is_some() && response.get("id").is_some() {
+                handle_roots_response(&response);
+                continue;
+            }
+        }
+
         let request: JsonRpcRequest = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(e) => {
@@ -238,14 +252,59 @@ pub fn run_mcp_server() {
             }
         };
 
-        if let Some(response) = handle_request(&config, &request) {
+        if let Some(response) = handle_request(&config, &request, &mut stdout) {
             let _ = writeln!(stdout, "{}", serde_json::to_string(&response).unwrap_or_default());
             let _ = stdout.flush();
         }
     }
 }
 
-fn handle_request(config: &Config, request: &JsonRpcRequest) -> Option<JsonRpcResponse> {
+/// 处理来自客户端的 roots/list 响应
+fn handle_roots_response(response: &Value) {
+    if let Some(result) = response.get("result") {
+        if let Some(roots) = result.get("roots").and_then(|r| r.as_array()) {
+            for root in roots {
+                if let Some(uri) = root.get("uri").and_then(|u| u.as_str()) {
+                    // uri 格式: file:///path/to/project
+                    if let Some(path) = uri.strip_prefix("file://") {
+                        // 从路径推断 project ID
+                        if let Some(project_id) = path_to_project_id(path) {
+                            CLIENT_PROJECT.with(|p| {
+                                *p.borrow_mut() = Some(project_id);
+                            });
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 将路径转换为 project ID
+/// 路径格式: /home/py/CLion/dev_xxx → -home-py-CLion-dev-xxx
+/// Claude Code 会把 `/` 和 `_` 都替换成 `-`，并保留前导 `-`
+fn path_to_project_id(path: &str) -> Option<String> {
+    let path = path.trim_end_matches('/');
+    if path.is_empty() {
+        return None;
+    }
+    // Claude Code 的转换规则：/ 和 _ 都变成 -
+    Some(path.replace('/', "-").replace('_', "-"))
+}
+
+/// 发送 roots/list 请求给客户端
+fn send_roots_request(stdout: &mut io::Stdout) {
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": "roots-list-1",
+        "method": "roots/list"
+    });
+    let _ = writeln!(stdout, "{}", serde_json::to_string(&request).unwrap_or_default());
+    let _ = stdout.flush();
+}
+
+fn handle_request(config: &Config, request: &JsonRpcRequest, stdout: &mut io::Stdout) -> Option<JsonRpcResponse> {
     let id = request.id.clone().unwrap_or(Value::Null);
 
     match request.method.as_str() {
@@ -255,7 +314,10 @@ fn handle_request(config: &Config, request: &JsonRpcRequest) -> Option<JsonRpcRe
             result: Some(json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {
-                    "tools": {}
+                    "tools": {},
+                    "roots": {
+                        "listChanged": true
+                    }
                 },
                 "serverInfo": {
                     "name": "mcp-claude-history",
@@ -265,7 +327,11 @@ fn handle_request(config: &Config, request: &JsonRpcRequest) -> Option<JsonRpcRe
             error: None,
         }),
 
-        "notifications/initialized" | "initialized" => None,
+        "notifications/initialized" | "initialized" => {
+            // 发送 roots/list 请求获取客户端工作目录
+            send_roots_request(stdout);
+            None
+        }
 
         "tools/list" => Some(JsonRpcResponse {
             jsonrpc: "2.0".to_string(),
@@ -350,10 +416,26 @@ fn execute_search(config: &Config, args: Value) -> Result<Value, Value> {
     let max_content = args.get("max_content").and_then(|v| v.as_u64()).unwrap_or(4000) as usize;
     let max_total = args.get("max_total").and_then(|v| v.as_u64()).unwrap_or(40000) as usize;
 
+    // 优先级：指定 project > 从 roots 获取 > 搜索所有
+    let (projects, all_projects) = if let Some(p) = project {
+        (p.split(',').map(|s| s.trim().to_string()).collect(), false)
+    } else if all {
+        (vec![], true)
+    } else {
+        // 尝试使用从 roots 获取的当前项目
+        let client_project = CLIENT_PROJECT.with(|p| p.borrow().clone());
+        if let Some(proj) = client_project {
+            (vec![proj], false)
+        } else {
+            // 无法确定当前项目，搜索所有
+            (vec![], true)
+        }
+    };
+
     let params = SearchParams {
         pattern: pattern.to_string(),
-        projects: project.map(|p| p.split(',').map(|s| s.trim().to_string()).collect()).unwrap_or_default(),
-        all_projects: all || project.is_none(),
+        projects,
+        all_projects,
         sessions: sessions.map(|s| s.split(',').map(|s| s.trim().to_string()).collect()).unwrap_or_default(),
         since: parse_datetime(since),
         until: parse_datetime(until),
