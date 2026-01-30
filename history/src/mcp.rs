@@ -291,8 +291,13 @@ fn path_to_project_id(path: &str) -> Option<String> {
     if path.is_empty() {
         return None;
     }
-    // Claude Code 的转换规则：/ 和 _ 都变成 -
-    Some(path.replace('/', "-").replace('_', "-"))
+    // Claude Code 的转换规则：/ 和 _ 都变成 -，且必须以 - 开头
+    let id = path.replace('/', "-").replace('_', "-");
+    if id.starts_with('-') {
+        Some(id)
+    } else {
+        Some(format!("-{}", id))
+    }
 }
 
 /// 发送 roots/list 请求给客户端
