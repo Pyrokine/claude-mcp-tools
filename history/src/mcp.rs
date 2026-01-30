@@ -536,6 +536,21 @@ fn parse_datetime(s: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> {
         }
         "week" => Some(now - chrono::Duration::days(7)),
         "month" => Some(now - chrono::Duration::days(30)),
-        _ => chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc)),
+        _ => {
+            // 优先尝试 RFC3339（带时区）
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+                return Some(dt.with_timezone(&chrono::Utc));
+            }
+            // 尝试 ISO8601 格式（不带时区，假设 UTC）
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+                return Some(chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc));
+            }
+            // 尝试只有日期
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                let dt = date.and_hms_opt(0, 0, 0)?;
+                return Some(chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc));
+            }
+            None
+        }
     }
 }
