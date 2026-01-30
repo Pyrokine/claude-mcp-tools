@@ -328,7 +328,7 @@ fn handle_request(config: &Config, request: &JsonRpcRequest, stdout: &mut io::St
                 },
                 "serverInfo": {
                     "name": "mcp-claude-history",
-                    "version": "1.0.0"
+                    "version": env!("CARGO_PKG_VERSION")
                 }
             })),
             error: None,
