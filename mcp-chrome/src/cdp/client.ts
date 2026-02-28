@@ -19,6 +19,16 @@ interface PendingCallback {
 }
 
 /**
+ * waitForEvent 活跃等待者
+ */
+interface EventWaiter {
+    event: string;
+    listener: CDPEventListener;
+    timer: NodeJS.Timeout;
+    reject: (error: Error) => void;
+}
+
+/**
  * CDP 事件监听器
  */
 type CDPEventListener = (params: unknown) => void;
@@ -33,6 +43,7 @@ export class CDPClient extends EventEmitter {
     private callbacks            = new Map<number, PendingCallback>()
     private nextId               = 1
     private eventListeners       = new Map<string, Set<CDPEventListener>>()
+    private activeEventWaiters   = new Set<EventWaiter>()
 
     private _endpoint: string    = ''
 
@@ -135,7 +146,14 @@ export class CDPClient extends EventEmitter {
                 },
                 method,
             })
-            this.ws!.send(JSON.stringify(message))
+
+            try {
+                this.ws!.send(JSON.stringify(message))
+            } catch (err) {
+                clearTimeout(timeoutId)
+                this.callbacks.delete(id)
+                reject(new CDPError(`Failed to send CDP command ${method}: ${err instanceof Error ? err.message : 'Unknown error'}`))
+            }
         })
     }
 
@@ -161,6 +179,8 @@ export class CDPClient extends EventEmitter {
 
     /**
      * 等待特定事件
+     *
+     * close()/handleClose() 会立即 reject 所有活跃的等待者，不必等 timer 超时。
      */
     waitForEvent<T = unknown>(
         event: string,
@@ -168,39 +188,50 @@ export class CDPClient extends EventEmitter {
         timeout = 30000,
     ): Promise<T> {
         return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
-                this.offEvent(event, listener)
-                reject(new TimeoutError(`等待事件超时: ${event} (${timeout}ms)`))
-            }, timeout)
-
             const listener: CDPEventListener = (params) => {
                 if (!predicate || predicate(params as T)) {
-                    clearTimeout(timer)
-                    this.offEvent(event, listener)
+                    cleanup()
                     resolve(params as T)
                 }
             }
 
+            const waiter: EventWaiter = {
+                event,
+                listener,
+                timer: setTimeout(() => {
+                    cleanup()
+                    reject(new TimeoutError(`等待事件超时: ${event} (${timeout}ms)`))
+                }, timeout),
+                reject,
+            }
+
+            const cleanup = () => {
+                clearTimeout(waiter.timer)
+                this.offEvent(event, listener)
+                this.activeEventWaiters.delete(waiter)
+            }
+
+            this.activeEventWaiters.add(waiter)
             this.onEvent(event, listener)
         })
     }
 
     /**
      * 关闭连接
+     *
+     * 立即 reject 所有 pending callbacks 和 waitForEvent，
+     * 然后发出 'disconnected' 信号供外部等待者（如 waitForAnyEvent）清理。
      */
     close(): void {
-        // 先拒绝所有等待中的回调
-        for (const [id, callback] of this.callbacks) {
-            callback.reject(new CDPError('连接主动关闭'))
-        }
-        this.callbacks.clear()
+        this.rejectAllPending('连接主动关闭')
         this.eventListeners.clear()
 
-        // 关闭 WebSocket
         if (this.ws) {
             this.ws.close()
             this.ws = null
         }
+
+        this.emit('disconnected')
     }
 
     /**
@@ -256,14 +287,27 @@ export class CDPClient extends EventEmitter {
     }
 
     /**
+     * 立即 reject 所有 pending callbacks 和 waitForEvent 等待者
+     */
+    private rejectAllPending(reason: string): void {
+        for (const [, callback] of this.callbacks) {
+            callback.reject(new CDPError(reason))
+        }
+        this.callbacks.clear()
+
+        for (const waiter of this.activeEventWaiters) {
+            clearTimeout(waiter.timer)
+            this.offEvent(waiter.event, waiter.listener)
+            waiter.reject(new CDPError(reason))
+        }
+        this.activeEventWaiters.clear()
+    }
+
+    /**
      * 处理连接关闭
      */
     private handleClose(): void {
-        // 拒绝所有等待中的回调
-        for (const [id, callback] of this.callbacks) {
-            callback.reject(new CDPError('连接已关闭'))
-            this.callbacks.delete(id)
-        }
+        this.rejectAllPending('连接已关闭')
         this.emit('disconnected')
     }
 }
@@ -351,3 +395,4 @@ export async function getTargets(
         clearTimeout(timeoutId)
     }
 }
+

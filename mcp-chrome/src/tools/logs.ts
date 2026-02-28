@@ -8,7 +8,7 @@
 
 import {writeFile} from 'fs/promises'
 import {z} from 'zod'
-import {formatErrorResponse, getSession} from '../core/index.js'
+import {formatErrorResponse, getSession, getUnifiedSession} from '../core/index.js'
 
 /**
  * logs 工具定义
@@ -45,6 +45,10 @@ export const logsToolDefinition = {
                 type: 'string',
                 description: '输出文件路径。若指定，日志导出为 JSON 文件',
             },
+            tabId: {
+                type: 'string',
+                description: '目标 Tab ID（可选，仅 Extension 模式）。不指定则使用当前 attach 的 tab。可操作非当前 attach 的 tab。CDP 模式下忽略此参数',
+            },
         },
         required: ['type'],
     },
@@ -60,6 +64,7 @@ const logsSchema = z.object({
                                 limit: z.number().optional(),
                                 clear: z.boolean().optional(),
                                 output: z.string().optional(),
+                                tabId: z.string().optional(),
                             })
 
 type LogsParams = z.infer<typeof logsSchema>;
@@ -72,19 +77,44 @@ export async function handleLogs(params: unknown): Promise<{
     isError?: boolean;
 }> {
     try {
-        const args    = logsSchema.parse(params)
-        const session = getSession()
-        const limit   = args.limit ?? 100
+        const args           = logsSchema.parse(params)
+        const unifiedSession = getUnifiedSession()
+        const mode           = unifiedSession.getMode()
+        const limit          = args.limit ?? 100
+
+        return await unifiedSession.withTabId(args.tabId, async () => {
 
         switch (args.type) {
             case 'console': {
-                const logs = session.getConsoleLogs(args.level, limit)
+                let logs: Array<{
+                    source?: string
+                    level: string
+                    text: string
+                    timestamp?: number
+                    url?: string
+                    lineNumber?: number
+                }>
 
-                if (args.output) {
-                    await writeFile(args.output, JSON.stringify(logs, null, 2), 'utf-8')
+                if (mode === 'extension') {
+                    // Extension 模式：使用 debugger API 获取控制台日志
+                    await unifiedSession.enableConsole()
+                    const extLogs = await unifiedSession.getConsoleLogs({
+                        level: args.level === 'all' ? undefined : args.level,
+                        clear: args.clear,
+                    })
+                    logs = extLogs.slice(0, limit)
+                } else {
+                    // CDP 模式
+                    const session = getSession()
+                    logs = session.getConsoleLogs(args.level, limit)
+
                     if (args.clear) {
                         session.clearLogs()
                     }
+                }
+
+                if (args.output) {
+                    await writeFile(args.output, JSON.stringify(logs, null, 2), 'utf-8')
                     return {
                         content: [
                             {
@@ -94,14 +124,11 @@ export async function handleLogs(params: unknown): Promise<{
                                                          type: 'console',
                                                          output: args.output,
                                                          count: logs.length,
+                                                         mode,
                                                      }),
                             },
                         ],
                     }
-                }
-
-                if (args.clear) {
-                    session.clearLogs()
                 }
 
                 return {
@@ -113,6 +140,7 @@ export async function handleLogs(params: unknown): Promise<{
                                     success: true,
                                     type: 'console',
                                     logs,
+                                    mode,
                                 },
                                 null,
                                 2,
@@ -123,7 +151,32 @@ export async function handleLogs(params: unknown): Promise<{
             }
 
             case 'network': {
-                const requests = session.getNetworkRequests(args.urlPattern, limit)
+                let requests: Array<{
+                    url: string
+                    method: string
+                    status?: number
+                    type: string
+                    timestamp: number
+                    duration?: number
+                }>
+
+                if (mode === 'extension') {
+                    // Extension 模式：使用 debugger API 获取网络日志
+                    await unifiedSession.enableNetwork()
+                    const extRequests = await unifiedSession.getNetworkRequests({
+                        urlPattern: args.urlPattern,
+                        clear: args.clear,
+                    })
+                    requests = extRequests.slice(0, limit)
+                } else {
+                    // CDP 模式
+                    const session = getSession()
+                    requests = session.getNetworkRequests(args.urlPattern, limit)
+
+                    if (args.clear) {
+                        session.clearLogs()
+                    }
+                }
 
                 if (args.output) {
                     await writeFile(
@@ -131,9 +184,6 @@ export async function handleLogs(params: unknown): Promise<{
                         JSON.stringify(requests, null, 2),
                         'utf-8',
                     )
-                    if (args.clear) {
-                        session.clearLogs()
-                    }
                     return {
                         content: [
                             {
@@ -143,14 +193,11 @@ export async function handleLogs(params: unknown): Promise<{
                                                          type: 'network',
                                                          output: args.output,
                                                          count: requests.length,
+                                                         mode,
                                                      }),
                             },
                         ],
                     }
-                }
-
-                if (args.clear) {
-                    session.clearLogs()
                 }
 
                 return {
@@ -162,6 +209,7 @@ export async function handleLogs(params: unknown): Promise<{
                                     success: true,
                                     type: 'network',
                                     requests,
+                                    mode,
                                 },
                                 null,
                                 2,
@@ -187,7 +235,10 @@ export async function handleLogs(params: unknown): Promise<{
                     isError: true,
                 }
         }
+
+        }) // withTabId
     } catch (error) {
         return formatErrorResponse(error)
     }
 }
+

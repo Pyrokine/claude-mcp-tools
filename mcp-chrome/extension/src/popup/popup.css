@@ -1,0 +1,108 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    font-size: 14px;
+    color: #333;
+    background: #fff;
+}
+
+.container {
+    width: 300px;
+    padding: 16px;
+}
+
+h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: #1a1a1a;
+}
+
+.status-section {
+    margin-bottom: 16px;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    background: #f5f5f5;
+    border-radius: 8px;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #9e9e9e;
+}
+
+.status-indicator.connected .status-dot {
+    background: #4caf50;
+}
+
+.status-indicator.disconnected .status-dot {
+    background: #f44336;
+}
+
+.status-text {
+    font-size: 13px;
+    color: #666;
+}
+
+.button-section {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.btn {
+    flex: 1;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: #2196f3;
+    color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: #1976d2;
+}
+
+.btn-secondary {
+    background: #f5f5f5;
+    color: #333;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: #e0e0e0;
+}
+
+.info-section {
+    padding-top: 12px;
+    border-top: 1px solid #eee;
+}
+
+.info-text {
+    font-size: 12px;
+    color: #999;
+    text-align: center;
+}

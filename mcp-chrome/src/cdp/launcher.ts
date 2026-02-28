@@ -5,10 +5,16 @@
  */
 
 import {ChildProcess, spawn} from 'child_process'
-import {existsSync} from 'fs'
-import {platform} from 'os'
+import {existsSync, mkdirSync} from 'fs'
+import {homedir, platform} from 'os'
+import {join} from 'path'
 import {BrowserNotFoundError, TimeoutError} from '../core/errors.js'
 import type {LaunchOptions} from '../core/types.js'
+
+/**
+ * 默认 profile 目录（固定路径，保留 cookies 和登录状态）
+ */
+const DEFAULT_PROFILE_DIR = join(homedir(), '.mcp-chrome', 'profile')
 
 /**
  * Chrome 可执行文件的常见路径
@@ -165,9 +171,14 @@ export class BrowserLauncher {
             args.push('--headless=new')
         }
 
-        if (options.userDataDir) {
-            args.push(`--user-data-dir=${options.userDataDir}`)
+        // 必须指定 user-data-dir，否则会复用已运行的 Chrome 实例导致启动失败
+        // 默认使用固定目录 ~/.mcp-chrome/profile，保留 cookies 和登录状态
+        const userDataDir = options.userDataDir ?? DEFAULT_PROFILE_DIR
+        // 确保目录存在
+        if (!existsSync(userDataDir)) {
+            mkdirSync(userDataDir, {recursive: true})
         }
+        args.push(`--user-data-dir=${userDataDir}`)
 
         // 打开一个空白页
         args.push('about:blank')

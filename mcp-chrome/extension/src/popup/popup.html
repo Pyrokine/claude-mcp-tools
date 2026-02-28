@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Chrome</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="container">
+        <h1>MCP Chrome</h1>
+
+        <div class="status-section">
+            <div class="status-indicator" id="statusIndicator">
+                <span class="status-dot"></span>
+                <span class="status-text" id="statusText">检查中...</span>
+            </div>
+        </div>
+
+        <div class="button-section">
+            <button id="connectBtn" class="btn btn-primary">连接</button>
+            <button id="disconnectBtn" class="btn btn-secondary" disabled>断开</button>
+        </div>
+
+        <div class="info-section">
+            <p class="info-text">
+                通过 WebSocket 与 MCP Server 通信
+            </p>
+            <p class="info-text">
+                服务端口范围：19222-19299
+            </p>
+        </div>
+    </div>
+
+    <script type="module" src="popup.ts"></script>
+</body>
+</html>

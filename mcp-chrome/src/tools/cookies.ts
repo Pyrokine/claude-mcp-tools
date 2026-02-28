@@ -2,15 +2,15 @@
  * cookies 工具
  *
  * Cookie 管理：
- * - get: 获取 cookies
+ * - get: 获取 cookies（支持多种过滤条件）
  * - set: 设置 cookie
- * - delete: 删除 cookie
- * - clear: 清空所有 cookies
+ * - delete: 删除指定 cookie
+ * - clear: 清空 cookies（支持按域名过滤）
  */
 
 import {writeFile} from 'fs/promises'
 import {z} from 'zod'
-import {formatErrorResponse, getSession} from '../core/index.js'
+import {formatErrorResponse, getUnifiedSession} from '../core/index.js'
 
 /**
  * cookies 工具定义
@@ -26,26 +26,50 @@ export const cookiesToolDefinition = {
                 enum: ['get', 'set', 'delete', 'clear'],
                 description: '操作类型',
             },
+            // 通用过滤参数（get/clear）
+            url: {
+                type: 'string',
+                description: 'URL 过滤（get/clear/set/delete）',
+            },
             name: {
                 type: 'string',
-                description: 'Cookie 名（get/set/delete）',
+                description: 'Cookie 名称（get/set/delete 必填）',
             },
+            domain: {
+                type: 'string',
+                description: '域名过滤（get/clear）',
+            },
+            path: {
+                type: 'string',
+                description: '路径过滤（get）或设置路径（set）',
+            },
+            secure: {
+                type: 'boolean',
+                description: '只返回 secure cookies（get）或设置 secure 属性（set）',
+            },
+            session: {
+                type: 'boolean',
+                description: '只返回会话 cookies（get）',
+            },
+            // set 专用参数
             value: {
                 type: 'string',
                 description: 'Cookie 值（set）',
             },
-            options: {
-                type: 'object',
-                properties: {
-                    domain: {type: 'string'},
-                    path: {type: 'string'},
-                    expires: {type: 'number'},
-                    httpOnly: {type: 'boolean'},
-                    secure: {type: 'boolean'},
-                    sameSite: {type: 'string', enum: ['Strict', 'Lax', 'None']},
-                },
-                description: 'Cookie 选项（set）',
+            httpOnly: {
+                type: 'boolean',
+                description: 'httpOnly 属性（set）',
             },
+            sameSite: {
+                type: 'string',
+                enum: ['Strict', 'Lax', 'None'],
+                description: 'SameSite 属性（set）',
+            },
+            expirationDate: {
+                type: 'number',
+                description: '过期时间戳（set）',
+            },
+            // 输出
             output: {
                 type: 'string',
                 description: '输出文件路径（get）。若指定，cookies 导出为 JSON 文件',
@@ -59,21 +83,22 @@ export const cookiesToolDefinition = {
  * cookies 参数 schema
  */
 const cookiesSchema = z.object({
-                                   action: z.enum(['get', 'set', 'delete', 'clear']),
-                                   name: z.string().optional(),
-                                   value: z.string().optional(),
-                                   options: z
-                                       .object({
-                                                   domain: z.string().optional(),
-                                                   path: z.string().optional(),
-                                                   expires: z.number().optional(),
-                                                   httpOnly: z.boolean().optional(),
-                                                   secure: z.boolean().optional(),
-                                                   sameSite: z.enum(['Strict', 'Lax', 'None']).optional(),
-                                               })
-                                       .optional(),
-                                   output: z.string().optional(),
-                               })
+    action: z.enum(['get', 'set', 'delete', 'clear']),
+    // 通用过滤参数
+    url: z.string().optional(),
+    name: z.string().optional(),
+    domain: z.string().optional(),
+    path: z.string().optional(),
+    secure: z.boolean().optional(),
+    session: z.boolean().optional(),
+    // set 专用参数
+    value: z.string().optional(),
+    httpOnly: z.boolean().optional(),
+    sameSite: z.enum(['Strict', 'Lax', 'None']).optional(),
+    expirationDate: z.number().optional(),
+    // 输出
+    output: z.string().optional(),
+})
 
 type CookiesParams = z.infer<typeof cookiesSchema>;
 
@@ -85,30 +110,51 @@ export async function handleCookies(params: unknown): Promise<{
     isError?: boolean;
 }> {
     try {
-        const args    = cookiesSchema.parse(params)
-        const session = getSession()
+        const args = cookiesSchema.parse(params)
+        const unifiedSession = getUnifiedSession()
 
         switch (args.action) {
             case 'get': {
-                const cookies = await session.getCookies()
+                // 构建过滤条件
+                const filter: {
+                    url?: string
+                    name?: string
+                    domain?: string
+                    path?: string
+                    secure?: boolean
+                    session?: boolean
+                } = {}
+                if (args.url) filter.url = args.url
+                if (args.name) filter.name = args.name
+                if (args.domain) filter.domain = args.domain
+                if (args.path) filter.path = args.path
+                if (args.secure !== undefined) filter.secure = args.secure
+                if (args.session !== undefined) filter.session = args.session
 
-                // 如果指定了 name，只返回匹配的 cookie
-                const result = args.name
-                               ? cookies.filter((c) => c.name === args.name)
-                               : cookies
+                const cookies = await unifiedSession.getCookies(filter) as Array<{
+                    name: string
+                    value: string
+                    domain?: string
+                    path?: string
+                    secure?: boolean
+                    httpOnly?: boolean
+                    sameSite?: string
+                    expirationDate?: number
+                    session?: boolean
+                }>
 
                 if (args.output) {
-                    await writeFile(args.output, JSON.stringify(result, null, 2), 'utf-8')
+                    await writeFile(args.output, JSON.stringify(cookies, null, 2), 'utf-8')
                     return {
                         content: [
                             {
                                 type: 'text',
                                 text: JSON.stringify({
-                                                         success: true,
-                                                         action: 'get',
-                                                         output: args.output,
-                                                         count: result.length,
-                                                     }),
+                                    success: true,
+                                    action: 'get',
+                                    output: args.output,
+                                    count: cookies.length,
+                                }),
                             },
                         ],
                     }
@@ -122,7 +168,8 @@ export async function handleCookies(params: unknown): Promise<{
                                 {
                                     success: true,
                                     action: 'get',
-                                    cookies: result,
+                                    count: cookies.length,
+                                    cookies,
                                 },
                                 null,
                                 2,
@@ -133,17 +180,33 @@ export async function handleCookies(params: unknown): Promise<{
             }
 
             case 'set': {
+                if (!args.url) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                    error: {
+                                        code: 'INVALID_ARGUMENT',
+                                        message: '设置 cookie 需要 url 参数',
+                                    },
+                                }),
+                            },
+                        ],
+                        isError: true,
+                    }
+                }
                 if (!args.name) {
                     return {
                         content: [
                             {
                                 type: 'text',
                                 text: JSON.stringify({
-                                                         error: {
-                                                             code: 'INVALID_ARGUMENT',
-                                                             message: '设置 cookie 需要 name 参数',
-                                                         },
-                                                     }),
+                                    error: {
+                                        code: 'INVALID_ARGUMENT',
+                                        message: '设置 cookie 需要 name 参数',
+                                    },
+                                }),
                             },
                         ],
                         isError: true,
@@ -155,78 +218,113 @@ export async function handleCookies(params: unknown): Promise<{
                             {
                                 type: 'text',
                                 text: JSON.stringify({
-                                                         error: {
-                                                             code: 'INVALID_ARGUMENT',
-                                                             message: '设置 cookie 需要 value 参数',
-                                                         },
-                                                     }),
+                                    error: {
+                                        code: 'INVALID_ARGUMENT',
+                                        message: '设置 cookie 需要 value 参数',
+                                    },
+                                }),
                             },
                         ],
                         isError: true,
                     }
                 }
 
-                await session.setCookie(args.name, args.value, args.options)
+                await unifiedSession.setCookie(args.name, args.value, {
+                    url: args.url,
+                    domain: args.domain,
+                    path: args.path,
+                    secure: args.secure,
+                    httpOnly: args.httpOnly,
+                    sameSite: args.sameSite,
+                    expirationDate: args.expirationDate,
+                })
 
                 return {
                     content: [
                         {
                             type: 'text',
                             text: JSON.stringify({
-                                                     success: true,
-                                                     action: 'set',
-                                                     name: args.name,
-                                                 }),
+                                success: true,
+                                action: 'set',
+                                url: args.url,
+                                name: args.name,
+                            }),
                         },
                     ],
                 }
             }
 
             case 'delete': {
+                if (!args.url) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                    error: {
+                                        code: 'INVALID_ARGUMENT',
+                                        message: '删除 cookie 需要 url 参数',
+                                    },
+                                }),
+                            },
+                        ],
+                        isError: true,
+                    }
+                }
                 if (!args.name) {
                     return {
                         content: [
                             {
                                 type: 'text',
                                 text: JSON.stringify({
-                                                         error: {
-                                                             code: 'INVALID_ARGUMENT',
-                                                             message: '删除 cookie 需要 name 参数',
-                                                         },
-                                                     }),
+                                    error: {
+                                        code: 'INVALID_ARGUMENT',
+                                        message: '删除 cookie 需要 name 参数',
+                                    },
+                                }),
                             },
                         ],
                         isError: true,
                     }
                 }
 
-                await session.deleteCookie(args.name)
+                await unifiedSession.deleteCookie(args.url, args.name)
 
                 return {
                     content: [
                         {
                             type: 'text',
                             text: JSON.stringify({
-                                                     success: true,
-                                                     action: 'delete',
-                                                     name: args.name,
-                                                 }),
+                                success: true,
+                                action: 'delete',
+                                url: args.url,
+                                name: args.name,
+                            }),
                         },
                     ],
                 }
             }
 
             case 'clear': {
-                await session.clearCookies()
+                // 构建过滤条件
+                const filter: {url?: string; domain?: string} = {}
+                if (args.url) filter.url = args.url
+                if (args.domain) filter.domain = args.domain
+
+                const result = await unifiedSession.clearCookies(
+                    Object.keys(filter).length > 0 ? filter : undefined,
+                )
 
                 return {
                     content: [
                         {
                             type: 'text',
                             text: JSON.stringify({
-                                                     success: true,
-                                                     action: 'clear',
-                                                 }),
+                                success: true,
+                                action: 'clear',
+                                filter: Object.keys(filter).length > 0 ? filter : 'all',
+                                count: result.count,
+                            }),
                         },
                     ],
                 }
@@ -238,11 +336,11 @@ export async function handleCookies(params: unknown): Promise<{
                         {
                             type: 'text',
                             text: JSON.stringify({
-                                                     error: {
-                                                         code: 'INVALID_ARGUMENT',
-                                                         message: `未知操作: ${args.action}`,
-                                                     },
-                                                 }),
+                                error: {
+                                    code: 'INVALID_ARGUMENT',
+                                    message: `未知操作: ${args.action}`,
+                                },
+                            }),
                         },
                     ],
                     isError: true,

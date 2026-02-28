@@ -135,13 +135,20 @@ export class ElementNotFoundError extends BrowserError {
     }
 
     override toJSON(): object {
+        // 日志去重并限制输出数量，避免重复日志刷屏
+        const uniqueLogs = [...new Set(this.logs)]
+        const maxLogs    = 10
+        const logsOutput = uniqueLogs.length > maxLogs
+                           ? [...uniqueLogs.slice(0, maxLogs), `... 共 ${uniqueLogs.length} 条（已省略）`]
+                           : uniqueLogs
+
         return {
             error: {
                 code: this.code,
                 message: this.message,
                 suggestion: this.suggestion,
                 context: this.context,
-                logs: this.logs,
+                logs: logsOutput,
             },
         }
     }
@@ -236,8 +243,21 @@ function isZodError(error: unknown): error is Error & { issues: ZodIssue[] } {
 }
 
 /**
+ * 检测错误是否可能由 tab 不在前台导致
+ */
+function detectVisibilityHint(errorMessage: string): string | null {
+    const msg = errorMessage.toLowerCase()
+    const keywords = ['hidden', 'visible', 'visibility', 'focus', 'blur', 'active tab', 'not active', 'capturevisibletab']
+    if (keywords.some(kw => msg.includes(kw))) {
+        return '此操作可能需要 tab 在前台。请使用 browse(action="attach", targetId="<id>", activate=true) 激活目标 tab'
+    }
+    return null
+}
+
+/**
  * 格式化错误为 MCP 工具响应
  * 特别处理 ZodError，转换为结构化的 INVALID_ARGUMENT 错误
+ * 自动检测 visibility 相关错误并添加 hint
  */
 export function formatErrorResponse(error: unknown): {
     content: Array<{ type: 'text'; text: string }>;
@@ -273,20 +293,25 @@ export function formatErrorResponse(error: unknown): {
 
     // 处理 BrowserError（带 toJSON 方法）
     const err = error as Error & { toJSON?: () => object }
+    const errorJson = err.toJSON?.() ?? {
+        error: {
+            code: 'UNKNOWN_ERROR',
+            message: err.message ?? String(error),
+        },
+    }
+
+    // 检测 visibility 相关错误，添加 hint
+    const errorMessage = err.message ?? String(error)
+    const hint = detectVisibilityHint(errorMessage)
+    if (hint) {
+        (errorJson as Record<string, unknown>).hint = hint
+    }
+
     return {
         content: [
             {
                 type: 'text',
-                text: JSON.stringify(
-                    err.toJSON?.() ?? {
-                        error: {
-                            code: 'UNKNOWN_ERROR',
-                            message: err.message ?? String(error),
-                        },
-                    },
-                    null,
-                    2,
-                ),
+                text: JSON.stringify(errorJson, null, 2),
             },
         ],
         isError: true,

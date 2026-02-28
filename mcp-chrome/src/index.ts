@@ -16,7 +16,7 @@ import {Server} from '@modelcontextprotocol/sdk/server/index.js'
 import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js'
 import {CallToolRequestSchema, ListToolsRequestSchema} from '@modelcontextprotocol/sdk/types.js'
 
-import {getSession} from './core/index.js'
+import {getSession, getUnifiedSession} from './core/index.js'
 import {
     browseToolDefinition,
     cookiesToolDefinition,
@@ -77,7 +77,7 @@ function createServer(): Server {
     const server = new Server(
         {
             name: 'mcp-chrome',
-            version: '1.0.0',
+            version: '1.1.0',
         },
         {
             capabilities: {
@@ -125,8 +125,8 @@ function createServer(): Server {
  */
 async function cleanup(): Promise<void> {
     try {
-        // 先关闭浏览器会话
-        await getSession().close()
+        // 关闭统一会话（包括 Extension 和 CDP）
+        await getUnifiedSession().close()
     } catch {
         // 忽略清理错误
     }
@@ -136,6 +136,9 @@ async function cleanup(): Promise<void> {
  * 主函数
  */
 async function main(): Promise<void> {
+    // 启动 Extension HTTP/WebSocket 服务器
+    await getUnifiedSession().startExtensionServer()
+
     const server    = createServer()
     const transport = new StdioServerTransport()
 

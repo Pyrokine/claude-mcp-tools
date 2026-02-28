@@ -9,9 +9,9 @@
  */
 
 import {z} from 'zod'
-import {formatErrorResponse, getSession, TimeoutError} from '../core/index.js'
+import {formatErrorResponse, getSession, getUnifiedSession, TimeoutError} from '../core/index.js'
 import type {ElementState, Target} from '../core/types.js'
-import {targetJsonSchema, targetZodSchema} from './schema.js'
+import {targetJsonSchema, targetToFindParams, targetZodSchema} from './schema.js'
 
 /**
  * wait 工具定义
@@ -40,9 +40,17 @@ export const waitToolDefinition = {
                 type: 'number',
                 description: '毫秒（time）',
             },
+            tabId: {
+                type: 'string',
+                description: '目标 Tab ID（可选，仅 Extension 模式）。不指定则使用当前 attach 的 tab。可操作非当前 attach 的 tab。CDP 模式下忽略此参数',
+            },
             timeout: {
                 type: 'number',
                 description: '超时',
+            },
+            frame: {
+                oneOf: [{type: 'string'}, {type: 'number'}],
+                description: 'iframe 定位（可选，仅 Extension 模式）。CSS 选择器（如 "iframe#main"）或索引（如 0）。不指定则在主框架操作',
             },
         },
         required: ['for'],
@@ -57,7 +65,9 @@ const waitSchema = z.object({
                                 target: targetZodSchema.optional(),
                                 state: z.enum(['visible', 'hidden', 'attached', 'detached']).optional(),
                                 ms: z.number().optional(),
+                                tabId: z.string().optional(),
                                 timeout: z.number().optional(),
+                                frame: z.union([z.string(), z.number()]).optional(),
                             })
 
 type WaitParams = z.infer<typeof waitSchema>;
@@ -70,9 +80,13 @@ export async function handleWait(params: unknown): Promise<{
     isError?: boolean;
 }> {
     try {
-        const args    = waitSchema.parse(params)
-        const session = getSession()
-        const timeout = args.timeout ?? 30000
+        const args           = waitSchema.parse(params)
+        const unifiedSession = getUnifiedSession()
+        const mode           = unifiedSession.getMode()
+        const timeout        = args.timeout ?? 30000
+
+        return await unifiedSession.withTabId(args.tabId, async () => {
+        return await unifiedSession.withFrame(args.frame, async () => {
 
         switch (args.for) {
             case 'element': {
@@ -93,7 +107,14 @@ export async function handleWait(params: unknown): Promise<{
                     }
                 }
                 const state = args.state ?? 'visible'
-                await waitForElement(session, args.target, state, timeout)
+
+                if (mode === 'extension') {
+                    await waitForElementExtension(unifiedSession, args.target, state, timeout)
+                } else {
+                    const session = getSession()
+                    await waitForElement(session, args.target, state, timeout)
+                }
+
                 return {
                     content: [
                         {
@@ -102,6 +123,7 @@ export async function handleWait(params: unknown): Promise<{
                                                      success: true,
                                                      waited: 'element',
                                                      state,
+                                                     mode,
                                                  }),
                         },
                     ],
@@ -109,7 +131,76 @@ export async function handleWait(params: unknown): Promise<{
             }
 
             case 'navigation': {
-                // 等待页面加载完成
+                if (mode === 'extension') {
+                    // Extension 模式：轮询 document.readyState 等待页面加载完成
+                    const navStart = Date.now()
+                    let navCompleted = false
+                    let navLastError: Error | null = null
+                    while (Date.now() - navStart < timeout) {
+                        if (!unifiedSession.isExtensionConnected()) {
+                            navLastError = new Error('Extension 未连接')
+                            await new Promise(resolve => setTimeout(resolve, 100))
+                            continue
+                        }
+                        try {
+                            const remaining = timeout - (Date.now() - navStart)
+                            const readyState = await unifiedSession.evaluate<string>('document.readyState', undefined, remaining)
+                            // evaluate 带 timeout 时，Extension 断连会静默回退 CDP，返回错误 tab 的数据
+                            if (!unifiedSession.isExtensionConnected()) {
+                                navLastError = new Error('Extension 在 evaluate 期间断开')
+                                await new Promise(resolve => setTimeout(resolve, 100))
+                                continue
+                            }
+                            if (readyState === 'complete') {
+                                navCompleted = true
+                                break
+                            }
+                        } catch (err) {
+                            // 页面正在导航中，evaluate 可能失败
+                            navLastError = err instanceof Error ? err : new Error(String(err))
+                        }
+                        await new Promise(resolve => setTimeout(resolve, 100))
+                    }
+                    if (!navCompleted) {
+                        const msg = `等待导航完成超时 (${timeout}ms)`
+                        throw new TimeoutError(navLastError ? `${msg}: ${navLastError.message}` : msg)
+                    }
+                    // 从实际 tab 中查询 URL/title，而非依赖全局缓存状态（支持 tabId 参数）
+                    const navRemaining = timeout - (Date.now() - navStart)
+                    let navUrl: string | null = null
+                    let navTitle: string | null = null
+                    if (navRemaining > 0) {
+                        try {
+                            const pageInfo = await unifiedSession.evaluate<{url: string; title: string}>(
+                                '({url: location.href, title: document.title})', undefined, navRemaining,
+                            )
+                            // CDP 回退的数据来自错误 tab，丢弃
+                            if (unifiedSession.isExtensionConnected()) {
+                                navUrl = pageInfo.url
+                                navTitle = pageInfo.title
+                            }
+                        } catch {
+                            // 预算耗尽或连接断开，降级返回（导航本身已成功）
+                        }
+                    }
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                                         success: true,
+                                                         waited: 'navigation',
+                                                         url: navUrl,
+                                                         title: navTitle,
+                                                         mode,
+                                                     }),
+                            },
+                        ],
+                    }
+                }
+
+                // CDP 模式
+                const session = getSession()
                 await waitForNavigation(session, timeout)
                 const sessionState = session.getState()
                 return {
@@ -121,6 +212,7 @@ export async function handleWait(params: unknown): Promise<{
                                                      waited: 'navigation',
                                                      url: sessionState?.url,
                                                      title: sessionState?.title,
+                                                     mode,
                                                  }),
                         },
                     ],
@@ -160,7 +252,60 @@ export async function handleWait(params: unknown): Promise<{
             }
 
             case 'idle': {
-                // 等待网络空闲
+                if (mode === 'extension') {
+                    // Extension 模式：等待 document.readyState === 'complete' + 额外网络静默期
+                    const idleStart = Date.now()
+                    let idleCompleted = false
+                    let idleLastError: Error | null = null
+                    while (Date.now() - idleStart < timeout) {
+                        if (!unifiedSession.isExtensionConnected()) {
+                            idleLastError = new Error('Extension 未连接')
+                            await new Promise(resolve => setTimeout(resolve, 100))
+                            continue
+                        }
+                        try {
+                            const remaining = timeout - (Date.now() - idleStart)
+                            const readyState = await unifiedSession.evaluate<string>('document.readyState', undefined, remaining)
+                            // evaluate 带 timeout 时，Extension 断连会静默回退 CDP，返回错误 tab 的数据
+                            if (!unifiedSession.isExtensionConnected()) {
+                                idleLastError = new Error('Extension 在 evaluate 期间断开')
+                                await new Promise(resolve => setTimeout(resolve, 100))
+                                continue
+                            }
+                            if (readyState === 'complete') {
+                                idleCompleted = true
+                                break
+                            }
+                        } catch (err) {
+                            idleLastError = err instanceof Error ? err : new Error(String(err))
+                        }
+                        await new Promise(resolve => setTimeout(resolve, 100))
+                    }
+                    if (!idleCompleted) {
+                        const msg = `等待网络空闲超时 (${timeout}ms)`
+                        throw new TimeoutError(idleLastError ? `${msg}: ${idleLastError.message}` : msg)
+                    }
+                    // 额外等待确保网络请求结束，受 timeout 约束
+                    const idleRemaining = timeout - (Date.now() - idleStart)
+                    if (idleRemaining > 0) {
+                        await new Promise(resolve => setTimeout(resolve, Math.min(500, idleRemaining)))
+                    }
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                                         success: true,
+                                                         waited: 'idle',
+                                                         mode,
+                                                     }),
+                            },
+                        ],
+                    }
+                }
+
+                // CDP 模式
+                const session = getSession()
                 await waitForNetworkIdle(session, timeout)
                 return {
                     content: [
@@ -169,6 +314,7 @@ export async function handleWait(params: unknown): Promise<{
                             text: JSON.stringify({
                                                      success: true,
                                                      waited: 'idle',
+                                                     mode,
                                                  }),
                         },
                     ],
@@ -191,13 +337,94 @@ export async function handleWait(params: unknown): Promise<{
                     isError: true,
                 }
         }
+
+        }) // withFrame
+        }) // withTabId
     } catch (error) {
         return formatErrorResponse(error)
     }
 }
 
 /**
- * 等待元素
+ * Extension 模式：等待元素
+ */
+async function waitForElementExtension(
+    unifiedSession: ReturnType<typeof getUnifiedSession>,
+    target: Target,
+    state: ElementState,
+    timeout: number,
+): Promise<void> {
+    const startTime = Date.now()
+    const retryDelay = 100
+    const {selector, text, xpath} = targetToFindParams(target)
+    let lastError: Error | null = null
+
+    while (true) {
+        const elapsed = Date.now() - startTime
+        if (elapsed >= timeout) {
+            const msg = `等待元素 ${JSON.stringify(target)} 状态 ${state} 超时 (${timeout}ms)`
+            throw new TimeoutError(lastError ? `${msg}: ${lastError.message}` : msg)
+        }
+
+        // 未连接时跳过 find()，避免阻塞超出用户 timeout
+        if (!unifiedSession.isExtensionConnected()) {
+            lastError = new Error('Extension 未连接')
+            await new Promise(resolve => setTimeout(resolve, retryDelay))
+            continue
+        }
+
+        try {
+            const remaining = timeout - elapsed
+            const elements = await unifiedSession.find(selector, text, xpath, remaining)
+            const found = elements.length > 0
+
+            switch (state) {
+                case 'attached':
+                case 'visible': {
+                    if (found) {
+                        if (state === 'visible') {
+                            const rect = elements[0].rect
+                            if (rect.width > 0 && rect.height > 0) {
+                                return
+                            }
+                        } else {
+                            return
+                        }
+                    }
+                    break
+                }
+
+                case 'detached':
+                case 'hidden': {
+                    if (!found) {
+                        return
+                    }
+                    if (state === 'hidden' && found) {
+                        const rect = elements[0].rect
+                        if (rect.width === 0 || rect.height === 0) {
+                            return
+                        }
+                    }
+                    break
+                }
+            }
+        } catch (err) {
+            // find() 在元素不存在时返回空数组（不抛异常），此处异常是真正的错误。
+            // 暂时性错误（RPC 超时、发送失败、连接断开）可重试，其他确定性错误立即抛出
+            if (err instanceof Error && /Request timeout|Failed to send|disconnect|未连接|stopped|replaced/i.test(err.message)) {
+                lastError = err
+                await new Promise(resolve => setTimeout(resolve, retryDelay))
+                continue
+            }
+            throw err
+        }
+
+        await new Promise(resolve => setTimeout(resolve, retryDelay))
+    }
+}
+
+/**
+ * CDP 模式：等待元素
  */
 async function waitForElement(
     session: ReturnType<typeof getSession>,
@@ -210,7 +437,8 @@ async function waitForElement(
 
     while (Date.now() - startTime < timeout) {
         try {
-            const locator = session.createLocator(target)
+            const remaining = timeout - (Date.now() - startTime)
+            const locator = session.createLocator(target, {timeout: remaining})
 
             switch (state) {
                 case 'attached':
@@ -284,3 +512,4 @@ async function waitForNetworkIdle(
 ): Promise<void> {
     await session.waitForNetworkIdle(timeout)
 }
+

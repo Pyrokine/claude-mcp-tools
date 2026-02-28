@@ -11,9 +11,9 @@
 
 import {z} from 'zod'
 import {generateBezierPath, getMouseMoveDelay, getTypingDelay, randomDelay} from '../anti-detection/index.js'
-import {formatErrorResponse, getSession} from '../core/index.js'
+import {formatErrorResponse, getSession, getUnifiedSession} from '../core/index.js'
 import type {InputEvent, Target} from '../core/types.js'
-import {targetJsonSchema, targetZodSchema} from './schema.js'
+import {targetJsonSchema, targetToFindParams, targetZodSchema} from './schema.js'
 
 /**
  * input 工具定义
@@ -91,9 +91,17 @@ export const inputToolDefinition = {
                 type: 'boolean',
                 description: '启用人类行为模拟（贝塞尔曲线移动、随机延迟）',
             },
+            tabId: {
+                type: 'string',
+                description: '目标 Tab ID（可选，仅 Extension 模式）。不指定则使用当前 attach 的 tab。可操作非当前 attach 的 tab。CDP 模式下忽略此参数',
+            },
             timeout: {
                 type: 'number',
                 description: '超时毫秒',
+            },
+            frame: {
+                oneOf: [{type: 'string'}, {type: 'number'}],
+                description: 'iframe 定位（可选，仅 Extension 模式）。CSS 选择器（如 "iframe#main"）或索引（如 0）。不指定则在主框架操作',
             },
         },
         required: ['events'],
@@ -134,7 +142,9 @@ const inputEventSchema = z.object({
 const inputSchema = z.object({
                                  events: z.array(inputEventSchema),
                                  humanize: z.boolean().optional(),
+                                 tabId: z.string().optional(),
                                  timeout: z.number().optional(),
+                                 frame: z.union([z.string(), z.number()]).optional(),
                              })
 
 type InputParams = z.infer<typeof inputSchema>;
@@ -147,13 +157,26 @@ export async function handleInput(params: unknown): Promise<{
     isError?: boolean;
 }> {
     try {
-        const args     = inputSchema.parse(params)
-        const session  = getSession()
-        const humanize = args.humanize ?? false
+        const args           = inputSchema.parse(params)
+        const unifiedSession = getUnifiedSession()
+        const mode           = unifiedSession.getMode()
+        const humanize       = args.humanize ?? false
 
-        // 执行事件序列
-        for (const event of args.events) {
-            await executeEvent(session, event as InputEvent, humanize, args.timeout)
+        return await unifiedSession.withTabId(args.tabId, async () => {
+        return await unifiedSession.withFrame(args.frame, async () => {
+
+        // 根据连接模式选择执行方式
+        if (mode === 'extension') {
+            // Extension 模式：使用 debugger API
+            for (const event of args.events) {
+                await executeEventExtension(unifiedSession, event as InputEvent, humanize, args.timeout)
+            }
+        } else {
+            // CDP 模式：使用原有逻辑
+            const session = getSession()
+            for (const event of args.events) {
+                await executeEvent(session, event as InputEvent, humanize, args.timeout)
+            }
         }
 
         return {
@@ -163,17 +186,161 @@ export async function handleInput(params: unknown): Promise<{
                     text: JSON.stringify({
                                              success: true,
                                              eventsExecuted: args.events.length,
+                                             mode,
                                          }),
                 },
             ],
         }
+
+        }) // withFrame
+        }) // withTabId
     } catch (error) {
         return formatErrorResponse(error)
     }
 }
 
 /**
- * 执行单个事件
+ * Extension 模式：执行单个事件
+ */
+async function executeEventExtension(
+    unifiedSession: ReturnType<typeof getUnifiedSession>,
+    event: InputEvent,
+    humanize: boolean,
+    timeout?: number,
+): Promise<void> {
+    switch (event.type) {
+        case 'keydown': {
+            if (!event.key) throw new Error('keydown 事件需要 key 参数')
+            await unifiedSession.keyDown(event.key)
+            break
+        }
+
+        case 'keyup': {
+            if (!event.key) throw new Error('keyup 事件需要 key 参数')
+            await unifiedSession.keyUp(event.key)
+            break
+        }
+
+        case 'mousedown': {
+            if (event.target) {
+                const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
+                await unifiedSession.mouseMove(point.x, point.y)
+            }
+            await unifiedSession.mouseDown(event.button ?? 'left')
+            break
+        }
+
+        case 'mouseup': {
+            await unifiedSession.mouseUp(event.button ?? 'left')
+            break
+        }
+
+        case 'mousemove': {
+            if (!event.target) throw new Error('mousemove 事件需要 target 参数')
+            const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
+
+            if (humanize && event.steps && event.steps > 1) {
+                const path = generateBezierPath(unifiedSession.getMousePosition(), point, event.steps)
+                for (const p of path) {
+                    await unifiedSession.mouseMove(p.x, p.y)
+                    await randomDelay(getMouseMoveDelay(), getMouseMoveDelay() * 2)
+                }
+            } else {
+                await unifiedSession.mouseMove(point.x, point.y)
+            }
+            break
+        }
+
+        case 'wheel': {
+            if (event.target) {
+                const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
+                await unifiedSession.mouseMove(point.x, point.y)
+            }
+            await unifiedSession.mouseWheel(event.deltaX ?? 0, event.deltaY ?? 0)
+            break
+        }
+
+        case 'touchstart': {
+            if (!event.target) throw new Error('touchstart 事件需要 target 参数')
+            const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
+            await unifiedSession.touchStart(point.x, point.y)
+            break
+        }
+
+        case 'touchmove': {
+            if (!event.target) throw new Error('touchmove 事件需要 target 参数')
+            const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
+            await unifiedSession.touchMove(point.x, point.y)
+            break
+        }
+
+        case 'touchend': {
+            await unifiedSession.touchEnd()
+            break
+        }
+
+        case 'type': {
+            if (!event.text) throw new Error('type 事件需要 text 参数')
+
+            // 如果有 target，先点击目标（聚焦）
+            if (event.target) {
+                const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
+                await unifiedSession.mouseMove(point.x, point.y)
+                await unifiedSession.mouseDown('left')
+                await unifiedSession.mouseUp('left')
+            }
+
+            const delay = event.delay ?? 0
+            if (humanize) {
+                for (const char of event.text) {
+                    await unifiedSession.typeText(char)
+                    await randomDelay(getTypingDelay(delay), getTypingDelay(delay) * 1.5)
+                }
+            } else {
+                await unifiedSession.typeText(event.text, delay)
+            }
+            break
+        }
+
+        case 'wait': {
+            if (!event.ms) throw new Error('wait 事件需要 ms 参数')
+            await new Promise(resolve => setTimeout(resolve, event.ms))
+            break
+        }
+
+        default:
+            throw new Error(`未知事件类型: ${(event as {type: string}).type}`)
+    }
+}
+
+/**
+ * Extension 模式：获取目标点坐标
+ */
+async function getTargetPointExtension(
+    unifiedSession: ReturnType<typeof getUnifiedSession>,
+    target: Target,
+    timeout?: number,
+): Promise<{x: number; y: number}> {
+    // 如果是坐标，直接返回
+    if ('x' in target && 'y' in target) {
+        return {x: target.x, y: target.y}
+    }
+
+    const {selector, text, xpath} = targetToFindParams(target)
+    const elements = await unifiedSession.find(selector, text, xpath, timeout)
+    if (elements.length === 0) {
+        throw new Error(`未找到目标元素: ${JSON.stringify(target)}`)
+    }
+
+    const rect = elements[0].rect
+    return {
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
+    }
+}
+
+/**
+ * CDP 模式：执行单个事件
  */
 async function executeEvent(
     session: ReturnType<typeof getSession>,
@@ -366,3 +533,4 @@ async function getTargetPoint(
 
     return locator.getClickablePoint()
 }
+

@@ -27,13 +27,15 @@ const DEFAULT_TIMEOUT = 30000
  */
 export class AutoWait {
     private timeout: number
+    private deadline: number
 
     constructor(
         private cdp: CDPClient,
         private sessionId: string,
         options: AutoWaitOptions = {},
     ) {
-        this.timeout = options.timeout ?? DEFAULT_TIMEOUT
+        this.timeout  = options.timeout ?? DEFAULT_TIMEOUT
+        this.deadline = Date.now() + this.timeout
     }
 
     /**
@@ -64,7 +66,7 @@ export class AutoWait {
                     throw new Error('元素处于禁用状态')
                 }
             },
-            {timeout: this.timeout},
+            {timeout: this.remaining()},
         )
     }
 
@@ -105,7 +107,7 @@ export class AutoWait {
                     throw new Error('元素位置不稳定')
                 }
             },
-            {timeout: this.timeout},
+            {timeout: this.remaining()},
         )
     }
 
@@ -174,7 +176,7 @@ export class AutoWait {
                     throw new Error('元素不可见')
                 }
             },
-            {timeout: this.timeout},
+            {timeout: this.remaining()},
         )
     }
 
@@ -203,8 +205,18 @@ export class AutoWait {
 
     /**
      * 发送 CDP 命令
+     *
+     * 使用 deadline 剩余时间，确保单命令不超出整体预算。
      */
     private send<T>(method: string, params?: object): Promise<T> {
-        return this.cdp.send(method, params, this.sessionId)
+        return this.cdp.send(method, params, this.sessionId, this.remaining())
+    }
+
+    /**
+     * deadline 剩余时间（至少 1ms，防止 0 被当作无超时）
+     */
+    private remaining(): number {
+        return Math.max(1, this.deadline - Date.now())
     }
 }
+

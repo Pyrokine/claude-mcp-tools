@@ -44,6 +44,7 @@ class SessionManager {
     private static readonly MAX_LOG_ENTRIES        = 1000
     private launcher: BrowserLauncher | null           = null
     private cdp: CDPClient | null                      = null
+    private connectedPort: number                      = 0
     private sessionId: string | null                   = null
     private currentTargetId: string | null             = null
     private state: SessionState | null                 = null
@@ -74,12 +75,71 @@ class SessionManager {
     }
 
     /**
+     * 获取当前调试端口
+     */
+    get port(): number | null {
+        return this.launcher?.port ?? (this.connectedPort || null)
+    }
+
+    /**
      * 启动浏览器
+     *
+     * 如果指定了端口，会先尝试连接该端口上已运行的浏览器。
+     * 只有连接失败时才启动新浏览器。
      */
     async launch(options: LaunchOptions = {}): Promise<TargetInfo> {
         return this.withLock(async () => {
+            const port = options.port ?? 0
+
+            // 如果指定了端口，先尝试连接已运行的浏览器
+            if (port > 0) {
+                try {
+                    const endpoint = await getBrowserWSEndpoint('127.0.0.1', port)
+                    // 连接成功，复用已有浏览器
+                    this.resetState()
+                    this.stealthMode = options.stealth ?? 'safe'
+                    this.cdp         = new CDPClient()
+                    await this.cdp.connect(endpoint, options.timeout)
+                    // 记录端口（connect 模式没有 launcher）
+                    this.connectedPort = port
+
+                    // 获取现有页面
+                    const targets    = await getTargets('127.0.0.1', port)
+                    let pageTarget = targets.find((t) => t.type === 'page')
+
+                    // 如果没有页面或 attach 失败，创建新 tab
+                    if (pageTarget) {
+                        try {
+                            await this.attachToTargetInternal(pageTarget.id)
+                        } catch {
+                            // attach 失败，创建新 tab
+                            pageTarget = undefined
+                        }
+                    }
+
+                    if (!pageTarget) {
+                        // 创建新 tab（在已有窗口）
+                        const newTarget = await this.newPageInternal()
+                        return {
+                            ...newTarget,
+                            reused: true,
+                        }
+                    }
+
+                    return {
+                        targetId: pageTarget.id,
+                        type: pageTarget.type,
+                        url: pageTarget.url,
+                        title: pageTarget.title,
+                        reused: true,
+                    }
+                } catch {
+                    // 连接失败，继续启动新浏览器
+                }
+            }
+
             // 关闭现有会话
-            await this.close()
+            this.resetState()
 
             // 保存 stealth 模式
             this.stealthMode = options.stealth ?? 'safe'
@@ -101,7 +161,7 @@ class SessionManager {
             }
 
             // 附加到页面
-            await this.attachToTarget(pageTarget.id)
+            await this.attachToTargetInternal(pageTarget.id)
 
             return {
                 targetId: pageTarget.id,
@@ -120,7 +180,7 @@ class SessionManager {
             const {host = '127.0.0.1', port, timeout = 30000, stealth = 'safe'} = options
 
             // 关闭现有会话
-            await this.close()
+            this.resetState()
 
             // 保存 stealth 模式
             this.stealthMode = stealth
@@ -141,7 +201,7 @@ class SessionManager {
             }
 
             // 附加到页面
-            await this.attachToTarget(pageTarget.id)
+            await this.attachToTargetInternal(pageTarget.id)
 
             return {
                 targetId: pageTarget.id,
@@ -179,9 +239,16 @@ class SessionManager {
     }
 
     /**
-     * 附加到指定页面
+     * 附加到指定页面（外部入口，加锁）
      */
     async attachToTarget(targetId: string): Promise<void> {
+        return this.withLock(async () => this.attachToTargetInternal(targetId))
+    }
+
+    /**
+     * 附加到指定页面（内部版本，不加锁，供 launch/connect 等已持锁方法调用）
+     */
+    private async attachToTargetInternal(targetId: string): Promise<void> {
         this.ensureConnected()
 
         // 如果已经附加到同一个 target，跳过
@@ -225,8 +292,8 @@ class SessionManager {
 
             const {wait = 'load', timeout = 30000} = options
 
-            // 导航
-            const {errorText} = (await this.send('Page.navigate', {url})) as {
+            // 导航（传 timeout 防止 CDP 默认 30s 截断用户预算）
+            const {errorText} = (await this.send('Page.navigate', {url}, timeout)) as {
                 errorText?: string;
             }
 
@@ -252,9 +319,14 @@ class SessionManager {
 
     /**
      * 等待网络空闲（无进行中的请求且持续指定时间）
+     *
+     * close() 时通过 'disconnected' 信号立即 reject，不必等 timer 超时。
      */
     async waitForNetworkIdle(timeout: number, idleTime: number = 500): Promise<void> {
         this.ensureSession()
+
+        // 捕获当前 cdp 引用，防止 close() 并发置 null 导致回调崩溃
+        const cdp = this.cdp!
 
         // 使用局部 Set 追踪本次等待的请求，避免污染成员变量
         const localPendingRequests = new Set<string>()
@@ -298,9 +370,10 @@ class SessionManager {
                 if (timeoutTimer !== null) {
                     clearTimeout(timeoutTimer)
                 }
-                this.cdp!.offEvent('Network.requestWillBeSent', onRequestStart)
-                this.cdp!.offEvent('Network.loadingFinished', onRequestEnd)
-                this.cdp!.offEvent('Network.loadingFailed', onRequestEnd)
+                cdp.offEvent('Network.requestWillBeSent', onRequestStart)
+                cdp.offEvent('Network.loadingFinished', onRequestEnd)
+                cdp.offEvent('Network.loadingFailed', onRequestEnd)
+                cdp.removeListener('disconnected', onDisconnected)
             }
 
             // 超时处理
@@ -309,10 +382,16 @@ class SessionManager {
                 reject(new NavigationTimeoutError('networkidle', timeout))
             }, timeout)
 
+            const onDisconnected = () => {
+                cleanup()
+                reject(new Error('CDP 连接已关闭'))
+            }
+            cdp.once('disconnected', onDisconnected)
+
             // 监听网络事件
-            this.cdp!.onEvent('Network.requestWillBeSent', onRequestStart)
-            this.cdp!.onEvent('Network.loadingFinished', onRequestEnd)
-            this.cdp!.onEvent('Network.loadingFailed', onRequestEnd)
+            cdp.onEvent('Network.requestWillBeSent', onRequestStart)
+            cdp.onEvent('Network.loadingFinished', onRequestEnd)
+            cdp.onEvent('Network.loadingFailed', onRequestEnd)
 
             // 初始检查
             checkIdle()
@@ -320,49 +399,95 @@ class SessionManager {
     }
 
     /**
-     * 等待导航完成（Page.loadEventFired 事件）
+     * 等待导航完成（跨文档导航或同文档导航）
      */
     async waitForNavigation(timeout: number = 30000): Promise<void> {
         this.ensureSession()
-        await this.cdp!.waitForEvent('Page.loadEventFired', undefined, timeout)
+        await this.waitForAnyEvent(
+            ['Page.loadEventFired', 'Page.navigatedWithinDocument'],
+            timeout,
+        )
     }
 
     /**
      * 后退
      */
-    async goBack(): Promise<void> {
-        this.ensureSession()
-        await this.send('Page.goBack')
-        await this.updateState()
+    async goBack(timeout = 30000): Promise<{navigated: boolean}> {
+        return this.withLock(async () => {
+            this.ensureSession()
+            const {currentIndex, entries} = await this.send<{
+                currentIndex: number
+                entries: Array<{id: number; url: string; title: string}>
+            }>('Page.getNavigationHistory', undefined, timeout)
+
+            if (currentIndex <= 0) {
+                return {navigated: false}
+            }
+
+            // 跨文档导航触发 loadEventFired，同文档导航（hash/pushState）触发 navigatedWithinDocument
+            const waitPromise = this.waitForAnyEvent(
+                ['Page.loadEventFired', 'Page.navigatedWithinDocument'],
+                timeout,
+            )
+            // 预注册 rejection handler：若 send() 抛错导致 waitPromise 永远不被 await，
+            // 其 timer reject 不会成为 unhandled rejection（Node 20 默认会退出进程）
+            waitPromise.catch(() => {})
+            await this.send('Page.navigateToHistoryEntry', {entryId: entries[currentIndex - 1].id}, timeout)
+            await waitPromise
+            await this.updateState()
+            return {navigated: true}
+        })
     }
 
     /**
      * 前进
      */
-    async goForward(): Promise<void> {
-        this.ensureSession()
-        await this.send('Page.goForward')
-        await this.updateState()
+    async goForward(timeout = 30000): Promise<{navigated: boolean}> {
+        return this.withLock(async () => {
+            this.ensureSession()
+            const {currentIndex, entries} = await this.send<{
+                currentIndex: number
+                entries: Array<{id: number; url: string; title: string}>
+            }>('Page.getNavigationHistory', undefined, timeout)
+
+            if (currentIndex >= entries.length - 1) {
+                return {navigated: false}
+            }
+
+            // 跨文档导航触发 loadEventFired，同文档导航（hash/pushState）触发 navigatedWithinDocument
+            const waitPromise = this.waitForAnyEvent(
+                ['Page.loadEventFired', 'Page.navigatedWithinDocument'],
+                timeout,
+            )
+            waitPromise.catch(() => {})
+            await this.send('Page.navigateToHistoryEntry', {entryId: entries[currentIndex + 1].id}, timeout)
+            await waitPromise
+            await this.updateState()
+            return {navigated: true}
+        })
     }
 
     /**
      * 刷新
      */
     async reload(options: { ignoreCache?: boolean; timeout?: number } = {}): Promise<void> {
-        this.ensureSession()
+        return this.withLock(async () => {
+            this.ensureSession()
 
-        const {ignoreCache = false, timeout = 30000} = options
+            const {ignoreCache = false, timeout = 30000} = options
 
-        const waitPromise = this.cdp!.waitForEvent(
-            'Page.loadEventFired',
-            undefined,
-            timeout,
-        )
+            const waitPromise = this.cdp!.waitForEvent(
+                'Page.loadEventFired',
+                undefined,
+                timeout,
+            )
+            waitPromise.catch(() => {})
 
-        await this.send('Page.reload', {ignoreCache})
+            await this.send('Page.reload', {ignoreCache}, timeout)
 
-        await waitPromise
-        await this.updateState()
+            await waitPromise
+            await this.updateState()
+        })
     }
 
     /**
@@ -551,17 +676,20 @@ class SessionManager {
                 deviceScaleFactor: 1,
                 mobile: false,
             })
+
+            try {
+                const {data} = (await this.send('Page.captureScreenshot', {
+                    format: 'png',
+                })) as { data: string }
+                return data
+            } finally {
+                await this.send('Emulation.clearDeviceMetricsOverride')
+            }
         }
 
         const {data} = (await this.send('Page.captureScreenshot', {
             format: 'png',
         })) as { data: string }
-
-        if (fullPage) {
-            // 恢复视口
-            await this.send('Emulation.clearDeviceMetricsOverride')
-        }
-
         return data
     }
 
@@ -634,10 +762,12 @@ class SessionManager {
 
     /**
      * 获取 Cookies
+     * @param urls 可选，限制返回指定 URL 的 cookies
      */
-    async getCookies(): Promise<Cookie[]> {
+    async getCookies(urls?: string[]): Promise<Cookie[]> {
         this.ensureSession()
-        const {cookies} = (await this.send('Network.getCookies')) as {
+        const params = urls?.length ? {urls} : {}
+        const {cookies} = (await this.send('Network.getCookies', params)) as {
             cookies: Cookie[];
         }
         return cookies
@@ -667,10 +797,10 @@ class SessionManager {
     /**
      * 删除 Cookie
      */
-    async deleteCookie(name: string): Promise<void> {
+    async deleteCookie(name: string, url?: string): Promise<void> {
         this.ensureSession()
-        const url = this.state?.url ?? 'http://localhost'
-        await this.send('Network.deleteCookies', {name, url})
+        const effectiveUrl = url ?? this.state?.url ?? 'http://localhost'
+        await this.send('Network.deleteCookies', {name, url: effectiveUrl})
     }
 
     /**
@@ -726,11 +856,18 @@ class SessionManager {
             expression    = `(${script})(${argsStr})`
         }
 
-        const {result, exceptionDetails} = (await this.send('Runtime.evaluate', {
+        const evalParams: Record<string, unknown> = {
             expression,
             returnByValue: true,
             awaitPromise: true,
-        }, timeout)) as {
+        }
+        if (timeout !== undefined) {
+            evalParams.timeout = timeout
+        }
+        // CDP 命令超时需大于脚本执行超时，给 WebSocket 通信留余量
+        const CDP_MARGIN = 5000
+        const sendTimeout = timeout !== undefined ? timeout + CDP_MARGIN : undefined
+        const {result, exceptionDetails} = (await this.send('Runtime.evaluate', evalParams, sendTimeout)) as {
             result: { value: T };
             exceptionDetails?: { exception: { description: string } };
         }
@@ -786,16 +923,23 @@ class SessionManager {
     }
 
     /**
-     * 新建页面
+     * 新建页面（外部入口，加锁）
      */
     async newPage(): Promise<TargetInfo> {
+        return this.withLock(async () => this.newPageInternal())
+    }
+
+    /**
+     * 新建页面（内部版本，不加锁，供 launch 等已持锁方法调用）
+     */
+    private async newPageInternal(): Promise<TargetInfo> {
         this.ensureConnected()
 
         const {targetId} = (await this.cdp!.send('Target.createTarget', {
             url: 'about:blank',
         })) as { targetId: string }
 
-        await this.attachToTarget(targetId)
+        await this.attachToTargetInternal(targetId)
 
         return {
             targetId,
@@ -806,49 +950,80 @@ class SessionManager {
     }
 
     /**
-     * 关闭页面
+     * 激活页面（切到前台）
      */
-    async closePage(targetId?: string): Promise<void> {
+    async activateTarget(targetId: string): Promise<void> {
         this.ensureConnected()
-
-        const id = targetId ?? this.currentTargetId
-        if (!id) {
-            throw new TargetNotFoundError('unknown')
-        }
-
-        await this.cdp!.send('Target.closeTarget', {targetId: id})
-
-        // 如果关闭的是当前页面，清除会话状态
-        if (id === this.currentTargetId) {
-            this.sessionId       = null
-            this.currentTargetId = null
-            this.state           = null
-        }
+        // Target 域命令是 browser-level，不携带 sessionId
+        await this.cdp!.send('Target.activateTarget', {targetId})
     }
 
     /**
-     * 关闭浏览器
+     * 关闭页面
+     */
+    async closePage(targetId?: string): Promise<void> {
+        return this.withLock(async () => {
+            this.ensureConnected()
+
+            const id = targetId ?? this.currentTargetId
+            if (!id) {
+                throw new TargetNotFoundError('unknown')
+            }
+
+            await this.cdp!.send('Target.closeTarget', {targetId: id})
+
+            // 如果关闭的是当前页面，清除会话状态
+            if (id === this.currentTargetId) {
+                this.sessionId       = null
+                this.currentTargetId = null
+                this.state           = null
+            }
+        })
+    }
+
+    /**
+     * 关闭浏览器（外部接口）
+     *
+     * 两阶段关闭：
+     * 1. 立即关闭 CDP 连接：reject 所有 pending callbacks 和 waitForEvent，
+     *    发出 'disconnected' 信号通知 waitForAnyEvent/waitForNetworkIdle 等外部等待者
+     * 2. 通过 withLock 串行化状态清理：等 withLock 中的操作处理完错误后再置空引用
      */
     async close(): Promise<void> {
-        // 清除日志
-        this.clearLogs()
+        // Phase 1: 立即关闭 CDP 连接（reject pending callbacks，清除 event listeners）
+        if (this.cdp) {
+            this.cdp.close()
+        }
 
-        // 关闭 CDP 连接
+        // Phase 2: 串行化状态清理（等 withLock 中的操作释放后再执行）
+        await this.withLock(async () => {
+            this.resetState()
+        })
+    }
+
+    /**
+     * 重置所有状态（同步，不加锁）
+     *
+     * 供已持有 withLock 的方法调用（launch/connect），避免 close() 的 withLock 重入死锁。
+     * 外部调用请使用 close()。
+     */
+    private resetState(): void {
         if (this.cdp) {
             this.cdp.close()
             this.cdp = null
         }
 
-        // 关闭浏览器进程
         if (this.launcher) {
             this.launcher.close()
             this.launcher = null
         }
 
+        this.clearLogs()
         this.sessionId          = null
         this.currentTargetId    = null
         this.state              = null
         this.listenersInstalled = false
+        this.connectedPort      = 0
     }
 
     /**
@@ -887,6 +1062,53 @@ class SessionManager {
         } finally {
             releaseLock!()
         }
+    }
+
+    /**
+     * 等待多个事件中的任一个触发
+     *
+     * 用于同时监听跨文档导航 (loadEventFired) 和同文档导航 (navigatedWithinDocument)，
+     * 任一事件触发后清理所有监听器和超时定时器。
+     * close() 时通过 'disconnected' 信号立即 reject，不必等 timer 超时。
+     */
+    private waitForAnyEvent(events: string[], timeout: number): Promise<void> {
+        // 捕获当前 cdp 引用，防止 close() 并发置 null 导致回调崩溃
+        const cdp = this.cdp
+        if (!cdp) {
+            return Promise.reject(new Error('CDP 连接已关闭'))
+        }
+
+        return new Promise((resolve, reject) => {
+            const listeners: Array<{event: string; listener: (params: unknown) => void}> = []
+
+            const cleanup = () => {
+                clearTimeout(timer)
+                for (const {event, listener} of listeners) {
+                    cdp.offEvent(event, listener)
+                }
+                cdp.removeListener('disconnected', onDisconnected)
+            }
+
+            const timer = setTimeout(() => {
+                cleanup()
+                reject(new NavigationTimeoutError('navigation', timeout))
+            }, timeout)
+
+            const onDisconnected = () => {
+                cleanup()
+                reject(new Error('CDP 连接已关闭'))
+            }
+            cdp.once('disconnected', onDisconnected)
+
+            for (const event of events) {
+                const listener = () => {
+                    cleanup()
+                    resolve()
+                }
+                listeners.push({event, listener})
+                cdp.onEvent(event, listener)
+            }
+        })
     }
 
     /**
@@ -1013,10 +1235,24 @@ class SessionManager {
     }
 
     /**
-     * 发送 CDP 命令
+     * 发送 CDP 命令（page-level，携带 sessionId）
+     *
+     * 每次调用都检查连接状态，防止 close() 并发置空 this.cdp 后崩溃。
+     * 多步操作（type 循环、fullPage 截图等）的 await 间隙可能被 close() 打断，
+     * ensureSession() 确保在当前 tick 内 this.cdp 非空。
      */
-    private send<T>(method: string, params?: object, timeout?: number): Promise<T> {
+    send<T>(method: string, params?: object, timeout?: number): Promise<T> {
+        this.ensureSession()
         return this.cdp!.send(method, params, this.sessionId ?? undefined, timeout)
+    }
+
+    /**
+     * 发送 browser-level CDP 命令（不携带 sessionId）
+     * 用于 Target.*、Browser.* 等浏览器级命令
+     */
+    sendBrowserCommand<T>(method: string, params?: object): Promise<T> {
+        this.ensureConnected()
+        return this.cdp!.send(method, params)
     }
 
     /**
@@ -1111,3 +1347,4 @@ function getKeyDefinition(key: string): {
 export function getSession(): SessionManager {
     return SessionManager.getInstance()
 }
+

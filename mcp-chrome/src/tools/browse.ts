@@ -13,7 +13,7 @@
  */
 
 import {z} from 'zod'
-import {formatErrorResponse, getSession} from '../core/index.js'
+import {formatErrorResponse, getSession, getUnifiedSession} from '../core/index.js'
 import type {WaitUntil} from '../core/types.js'
 
 /**
@@ -62,10 +62,10 @@ export const browseToolDefinition = {
                 enum: ['off', 'safe', 'aggressive'],
                 description: '反检测模式（launch/connect）。off=关闭，safe=最小改动（默认），aggressive=完整伪装',
             },
-            // connect 参数
+            // launch/connect 参数
             port: {
                 type: 'number',
-                description: '调试端口（connect）',
+                description: '调试端口（launch/connect）。launch 时不指定则使用随机端口',
             },
             host: {
                 type: 'string',
@@ -74,7 +74,11 @@ export const browseToolDefinition = {
             // attach 参数
             targetId: {
                 type: 'string',
-                description: '目标 ID（attach）。从 list 结果中获取',
+                description: '目标 ID（attach）。从 list 结果中获取。Extension 模式为数字 Tab ID，CDP 模式为 WebSocket target ID。仅在当前 mode 下有效',
+            },
+            activate: {
+                type: 'boolean',
+                description: '是否激活 Tab（attach）。默认 false 只设置操作目标不切到前台',
             },
             // open 参数
             url: {
@@ -121,13 +125,14 @@ const browseSchema = z.object({
                                   headless: z.boolean().optional(),
                                   userDataDir: z.string().optional(),
                                   stealth: z.enum(['off', 'safe', 'aggressive']).optional(),
-                                  port: z.number().optional(),
+                                  port: z.coerce.number().optional(),
                                   host: z.string().optional(),
                                   targetId: z.string().optional(),
+                                  activate: z.boolean().optional(),
                                   url: z.string().optional(),
                                   wait: z.enum(['load', 'domcontentloaded', 'networkidle']).optional(),
                                   ignoreCache: z.boolean().optional(),
-                                  timeout: z.number().optional(),
+                                  timeout: z.coerce.number().optional(),
                               })
 
 type BrowseParams = z.infer<typeof browseSchema>;
@@ -140,19 +145,59 @@ export async function handleBrowse(params: unknown): Promise<{
     isError?: boolean;
 }> {
     try {
-        const args    = browseSchema.parse(params)
-        const session = getSession()
+        const args           = browseSchema.parse(params)
+        const unifiedSession = getUnifiedSession()
+        const cdpSession     = getSession()
+
+        // 优先使用 Extension 模式（如果启用了，即使当前断开也使用，会自动等待重连）
+        const useExtension = unifiedSession.isExtensionModeEnabled()
 
         switch (args.action) {
             case 'launch': {
-                const target = await session.launch({
-                                                        executablePath: args.executablePath,
-                                                        incognito: args.incognito ?? false,
-                                                        headless: args.headless ?? false,
-                                                        userDataDir: args.userDataDir,
-                                                        timeout: args.timeout ?? 30000,
-                                                        stealth: args.stealth as 'off' | 'safe' | 'aggressive' | undefined,
-                                                    })
+                // Extension 模式：直接创建新 Tab
+                if (useExtension) {
+                    const target = await unifiedSession.launch({
+                        port: args.port,
+                        executablePath: args.executablePath,
+                        headless: args.headless,
+                        userDataDir: args.userDataDir,
+                        incognito: args.incognito,
+                        timeout: args.timeout,
+                        stealth: args.stealth as 'off' | 'safe' | 'aggressive' | undefined,
+                    })
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify(
+                                    {
+                                        success: true,
+                                        action: 'launch',
+                                        mode: target.mode,
+                                        note: target.mode === 'extension'
+                                              ? 'Extension 模式：使用用户浏览器，共享登录状态'
+                                              : '已启动新浏览器（Extension 未连接，fallback 到 CDP 模式）',
+                                        target,
+                                    },
+                                    null,
+                                    2,
+                                ),
+                            },
+                        ],
+                    }
+                }
+
+                // CDP 模式：启动新浏览器
+                const target = await cdpSession.launch({
+                                                           executablePath: args.executablePath,
+                                                           port: args.port ?? 0,
+                                                           incognito: args.incognito ?? false,
+                                                           headless: args.headless ?? false,
+                                                           userDataDir: args.userDataDir,
+                                                           timeout: args.timeout ?? 30000,
+                                                           stealth: args.stealth as 'off' | 'safe' | 'aggressive' | undefined,
+                                                       })
+                const reused = target.reused ?? false
                 return {
                     content: [
                         {
@@ -161,6 +206,12 @@ export async function handleBrowse(params: unknown): Promise<{
                                 {
                                     success: true,
                                     action: 'launch',
+                                    mode: 'cdp',
+                                    port: cdpSession.port,
+                                    reused,
+                                    note: reused
+                                          ? '已复用运行中的浏览器，保留登录状态'
+                                          : '已启动新浏览器，登录状态保存在 ~/.mcp-chrome/profile',
                                     target,
                                 },
                                 null,
@@ -172,6 +223,27 @@ export async function handleBrowse(params: unknown): Promise<{
             }
 
             case 'connect': {
+                // 显式传 port 时走 CDP 连接（即使 Extension 服务器已启动）
+                if (useExtension && !args.port) {
+                    const connected = unifiedSession.isExtensionConnected()
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                                         success: connected,
+                                                         action: 'connect',
+                                                         mode: 'extension',
+                                                         connected,
+                                                         note: connected
+                                                               ? 'Extension 模式已连接，无需 connect'
+                                                               : 'Extension 服务器已启动但未连接，请确保 Chrome 已运行且安装了 MCP Chrome 扩展',
+                                                     }),
+                            },
+                        ],
+                    }
+                }
+
                 if (!args.port) {
                     return {
                         content: [
@@ -189,12 +261,12 @@ export async function handleBrowse(params: unknown): Promise<{
                         isError: true,
                     }
                 }
-                const target = await session.connect({
-                                                         host: args.host ?? '127.0.0.1',
-                                                         port: args.port,
-                                                         timeout: args.timeout ?? 30000,
-                                                         stealth: args.stealth as 'off' | 'safe' | 'aggressive' | undefined,
-                                                     })
+                const target = await cdpSession.connect({
+                                                            host: args.host ?? '127.0.0.1',
+                                                            port: args.port,
+                                                            timeout: args.timeout ?? 30000,
+                                                            stealth: args.stealth as 'off' | 'safe' | 'aggressive' | undefined,
+                                                        })
                 return {
                     content: [
                         {
@@ -203,6 +275,8 @@ export async function handleBrowse(params: unknown): Promise<{
                                 {
                                     success: true,
                                     action: 'connect',
+                                    mode: 'cdp',
+                                    port: args.port,
                                     target,
                                 },
                                 null,
@@ -214,20 +288,26 @@ export async function handleBrowse(params: unknown): Promise<{
             }
 
             case 'list': {
-                const targets = await session.listTargets()
+                const mode = unifiedSession.getMode()
+                const targets = await unifiedSession.listTargets()
+
+                const result: Record<string, unknown> = {
+                    success: true,
+                    action: 'list',
+                    mode,
+                    targets,
+                }
+
+                // 当没有连接时，提供安装提示
+                if (mode === 'none') {
+                    result.note = '未连接浏览器。请确保 Chrome 已运行且 MCP Chrome 扩展已安装。'
+                }
+
                 return {
                     content: [
                         {
                             type: 'text',
-                            text: JSON.stringify(
-                                {
-                                    success: true,
-                                    action: 'list',
-                                    targets,
-                                },
-                                null,
-                                2,
-                            ),
+                            text: JSON.stringify(result, null, 2),
                         },
                     ],
                 }
@@ -252,7 +332,13 @@ export async function handleBrowse(params: unknown): Promise<{
                         isError: true,
                     }
                 }
-                await session.attachToTarget(args.targetId)
+                if (args.activate) {
+                    // 激活 Tab（切到前台）
+                    await unifiedSession.activatePage(args.targetId)
+                } else {
+                    // 只设置操作目标，不激活（不切到前台）
+                    await unifiedSession.selectPage(args.targetId)
+                }
                 return {
                     content: [
                         {
@@ -260,7 +346,9 @@ export async function handleBrowse(params: unknown): Promise<{
                             text: JSON.stringify({
                                                      success: true,
                                                      action: 'attach',
+                                                     mode: unifiedSession.getMode(),
                                                      targetId: args.targetId,
+                                                     activated: args.activate ?? false,
                                                  }),
                         },
                     ],
@@ -285,11 +373,11 @@ export async function handleBrowse(params: unknown): Promise<{
                         isError: true,
                     }
                 }
-                await session.navigate(args.url, {
+                await unifiedSession.navigate(args.url, {
                     wait: args.wait as WaitUntil,
                     timeout: args.timeout ?? 30000,
                 })
-                const state = session.getState()
+                const state = unifiedSession.getState()
                 return {
                     content: [
                         {
@@ -298,6 +386,7 @@ export async function handleBrowse(params: unknown): Promise<{
                                 {
                                     success: true,
                                     action: 'open',
+                                    mode: unifiedSession.getMode(),
                                     url: state?.url,
                                     title: state?.title,
                                 },
@@ -310,8 +399,8 @@ export async function handleBrowse(params: unknown): Promise<{
             }
 
             case 'back': {
-                await session.goBack()
-                const state = session.getState()
+                const result = await unifiedSession.goBack(args.timeout)
+                const state = unifiedSession.getState()
                 return {
                     content: [
                         {
@@ -319,8 +408,11 @@ export async function handleBrowse(params: unknown): Promise<{
                             text: JSON.stringify({
                                                      success: true,
                                                      action: 'back',
+                                                     mode: unifiedSession.getMode(),
+                                                     navigated: result.navigated,
                                                      url: state?.url,
                                                      title: state?.title,
+                                                     ...(result.navigated ? {} : {note: '无后退历史'}),
                                                  }),
                         },
                     ],
@@ -328,8 +420,8 @@ export async function handleBrowse(params: unknown): Promise<{
             }
 
             case 'forward': {
-                await session.goForward()
-                const state = session.getState()
+                const result = await unifiedSession.goForward(args.timeout)
+                const state = unifiedSession.getState()
                 return {
                     content: [
                         {
@@ -337,8 +429,11 @@ export async function handleBrowse(params: unknown): Promise<{
                             text: JSON.stringify({
                                                      success: true,
                                                      action: 'forward',
+                                                     mode: unifiedSession.getMode(),
+                                                     navigated: result.navigated,
                                                      url: state?.url,
                                                      title: state?.title,
+                                                     ...(result.navigated ? {} : {note: '无前进历史'}),
                                                  }),
                         },
                     ],
@@ -346,11 +441,12 @@ export async function handleBrowse(params: unknown): Promise<{
             }
 
             case 'refresh': {
-                await session.reload({
-                                         ignoreCache: args.ignoreCache ?? false,
-                                         timeout: args.timeout ?? 30000,
-                                     })
-                const state = session.getState()
+                await unifiedSession.reload({
+                                                ignoreCache: args.ignoreCache ?? false,
+                                                waitUntil: args.wait,
+                                                timeout: args.timeout ?? 30000,
+                                            })
+                const state = unifiedSession.getState()
                 return {
                     content: [
                         {
@@ -358,6 +454,7 @@ export async function handleBrowse(params: unknown): Promise<{
                             text: JSON.stringify({
                                                      success: true,
                                                      action: 'refresh',
+                                                     mode: unifiedSession.getMode(),
                                                      url: state?.url,
                                                      title: state?.title,
                                                  }),
@@ -367,7 +464,27 @@ export async function handleBrowse(params: unknown): Promise<{
             }
 
             case 'close': {
-                await session.close()
+                // 根据实际连接状态决定关闭行为，而非 extensionBridge 是否存在
+                const currentMode = unifiedSession.getMode()
+                if (currentMode !== 'cdp') {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                                         success: true,
+                                                         action: 'close',
+                                                         mode: currentMode,
+                                                         note: currentMode === 'extension'
+                                                               ? 'Extension 模式：会话已结束，浏览器保持打开'
+                                                               : '无活跃连接',
+                                                     }),
+                            },
+                        ],
+                    }
+                }
+
+                await cdpSession.close()
                 return {
                     content: [
                         {
@@ -375,6 +492,7 @@ export async function handleBrowse(params: unknown): Promise<{
                             text: JSON.stringify({
                                                      success: true,
                                                      action: 'close',
+                                                     mode: 'cdp',
                                                  }),
                         },
                     ],
@@ -401,3 +519,4 @@ export async function handleBrowse(params: unknown): Promise<{
         return formatErrorResponse(error)
     }
 }
+

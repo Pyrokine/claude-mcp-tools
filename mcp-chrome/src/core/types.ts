@@ -25,6 +25,7 @@ export type Target =
     | { testId: string } // data-testid：getByTestId
     // 传统定位
     | { css: string } // CSS 选择器
+    | { css: string; text: string; exact?: boolean } // CSS + 文本组合
     | { xpath: string } // XPath
     // 坐标定位
     | { x: number; y: number }; // 绝对坐标
@@ -191,6 +192,8 @@ export interface TargetInfo {
     type: string;
     url: string;
     title: string;
+    /** 是否复用了已运行的浏览器（launch 时如果连接到已有浏览器则为 true） */
+    reused?: boolean;
 }
 
 /**
@@ -307,7 +310,7 @@ export function isRoleTarget(
 export function isTextTarget(
     target: Target,
 ): target is { text: string; exact?: boolean } {
-    return 'text' in target
+    return 'text' in target && !('css' in target)
 }
 
 export function isLabelTarget(
@@ -340,8 +343,12 @@ export function isTestIdTarget(
     return 'testId' in target
 }
 
+export function isCSSTextTarget(target: Target): target is { css: string; text: string; exact?: boolean } {
+    return 'css' in target && 'text' in target
+}
+
 export function isCSSTarget(target: Target): target is { css: string } {
-    return 'css' in target
+    return 'css' in target && !('text' in target)
 }
 
 export function isXPathTarget(target: Target): target is { xpath: string } {
