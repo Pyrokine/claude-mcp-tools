@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-基于 Chrome DevTools Protocol (CDP) 的浏览器自动化 MCP Server。
+Chrome 浏览器自动化 MCP Server，双模式架构：**Extension 模式**（推荐）操控现有浏览器，**CDP 模式**（回退）启动独立实例。
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](https://nodejs.org/)
@@ -10,22 +10,27 @@
 
 ## 功能特性
 
-- **原生 CDP**：直接通过 Chrome DevTools Protocol 通信，无 Puppeteer/Playwright 依赖
-- **8 个统一工具**：从 30+ 细粒度工具精简为 8 个基于 action 的工具
-- **语义化定位**：10 种元素定位方式（role、text、label、css、xpath、坐标等）
-- **自动等待**：内置可点击性、可输入性检测
-- **结构化错误**：每个错误包含 code、message、suggestion、context
+- **双模式**：Extension 模式共享登录状态；CDP 模式用于无头/隔离场景
+- **8 个统一工具**：基于 action 的设计，覆盖浏览、输入、提取、等待、执行、管理、Cookie、日志
+- **多 Tab 并行**：`tabId` 参数支持对任意 Tab 操作，无需切换焦点
+- **iframe 穿透**：`frame` 参数支持操作 iframe 内元素（CSS 选择器或索引，Extension 模式）
+- **语义化定位**：11 种元素定位方式（role、text、label、css、css+文本组合、xpath、坐标等）
+- **自动等待**：内置可点击性、可输入性检测，基于 deadline 的超时预算机制
+- **双输入模式**：`precise`（debugger API，可绕过 CSP）或 `stealth`（JS 注入，无调试横幅）
+- **智能输出**：裸 `return` 语句自动 IIFE 包裹；大结果（>100KB）自动落盘；`output` 对字符串写入原始文本
+- **多服务器**：Extension 自动发现并同时连接多个 MCP Server 实例
 - **反检测**：可选的指纹伪装和行为模拟
+- **结构化错误**：每个错误包含 code、message、suggestion、context
 
 ## 兼容客户端
 
-| 客户端            | 状态 |
-|----------------|----|
-| Claude Code    | ✅  |
-| Claude Desktop | ✅  |
-| Cursor         | ✅  |
-| Windsurf       | ✅  |
-| 其他 MCP 兼容客户端   | ✅  |
+| 客户端              | 状态 |
+|---------------------|------|
+| Claude Code         | ✅    |
+| Claude Desktop      | ✅    |
+| Cursor              | ✅    |
+| Windsurf            | ✅    |
+| 其他 MCP 兼容客户端 | ✅    |
 
 ## 安装
 
@@ -44,30 +49,26 @@ npm run build
 
 ## 快速开始
 
-### 1. 启动带远程调试的 Chrome
+### 模式一：Extension 模式（推荐）
+
+Extension 模式操控你现有的 Chrome——共享登录状态、Cookie 和浏览上下文。
+
+**第一步：安装 Chrome Extension**
+
+1. 在 Chrome 中打开 `chrome://extensions/`
+2. 开启右上角"开发者模式"
+3. 点击"加载已解压的扩展程序" → 选择 `mcp-chrome/extension/dist/` 目录
+4. 工具栏出现 MCP Chrome 图标
+
+**第二步：配置 MCP 客户端**
 
 ```bash
-# 有界面
-./scripts/start-chrome.sh
-
-# 无头模式
-./scripts/start-chrome-headless.sh
-
-# 或手动启动：
-google-chrome --remote-debugging-port=9222
-```
-
-### 2. 配置 MCP 客户端
-
-#### Claude Code
-
-```bash
+# Claude Code
 claude mcp add chrome -- node /path/to/mcp-chrome/dist/index.js
 ```
 
-#### Claude Desktop / 其他客户端
-
 ```json
+// Claude Desktop / 其他客户端
 {
   "mcpServers": {
     "chrome": {
@@ -78,93 +79,136 @@ claude mcp add chrome -- node /path/to/mcp-chrome/dist/index.js
 }
 ```
 
+**第三步：连接**
+
+Extension 通过 HTTP/WebSocket 自动连接 MCP Server（端口 19222-19299）。点击工具栏图标可查看连接状态。
+
+```
+browse(action="list")          // 列出所有 Tab
+browse(action="open", url="https://example.com")
+extract(type="screenshot")
+```
+
+### 模式二：CDP 模式（回退）
+
+CDP 模式启动或连接独立的 Chrome 实例。适用于未安装 Extension 或需要无头/隔离的场景。
+
+```bash
+# 启动带远程调试的 Chrome
+google-chrome --remote-debugging-port=9222
+```
+
+```
+browse(action="connect", port=9222)
+browse(action="open", url="https://example.com")
+```
+
+> Extension 已连接时，所有工具自动使用 Extension 模式。仅当 Extension 不可用时才激活 CDP 模式。
+
 ## 可用工具（8 个）
 
 ### browse - 浏览器管理与导航
 
-| Action    | 描述                                        |
-|-----------|-------------------------------------------|
-| `launch`  | 启动新 Chrome 实例                             |
-| `connect` | 连接已运行的 Chrome（需要 --remote-debugging-port） |
-| `list`    | 列出所有可用页面/目标                               |
-| `attach`  | 附加到指定页面                                   |
-| `open`    | 导航到 URL                                   |
-| `back`    | 后退                                        |
-| `forward` | 前进                                        |
-| `refresh` | 刷新                                        |
-| `close`   | 关闭浏览器                                     |
+| Action    | 描述                         |
+|-----------|------------------------------|
+| `launch`  | 启动新 Chrome 实例（CDP 模式）|
+| `connect` | 连接已运行的 Chrome（CDP 模式）|
+| `list`    | 列出所有页面/Tab               |
+| `attach`  | 附加到指定页面/Tab             |
+| `open`    | 导航到 URL                    |
+| `back`    | 后退                          |
+| `forward` | 前进                          |
+| `refresh` | 刷新                          |
+| `close`   | 关闭浏览器连接                 |
 
-**反检测模式**（用于 `launch`/`connect`）：
-
-| 模式           | 描述                                   |
-|--------------|--------------------------------------|
-| `off`        | 关闭 - 纯净模式，适合测试/CI                    |
-| `safe`       | 最小改动（默认） - 移除 webdriver 标识、清理 CDP 痕迹 |
-| `aggressive` | 完整伪装 - 插件、WebGL、语言等（可能有副作用）          |
+Extension 特有：`list` 返回 `managed` 字段（Tab 是否在 MCP Chrome 分组中）和 `isActive` 字段（是否为当前操作目标）。`open` 自动创建 Tab 分组（cyan 色）。
 
 ### input - 键鼠输入
 
 事件序列模型，支持任意组合：
 
-| 事件类型                                    | 描述      |
-|-----------------------------------------|---------|
-| `keydown` / `keyup`                     | 按键按下/释放 |
-| `mousedown` / `mouseup`                 | 鼠标按下/释放 |
-| `mousemove`                             | 鼠标移动    |
-| `wheel`                                 | 滚轮滚动    |
-| `touchstart` / `touchmove` / `touchend` | 触摸事件    |
-| `type`                                  | 输入文本    |
-| `wait`                                  | 事件间暂停   |
+| 事件类型                                  | 描述         |
+|-------------------------------------------|--------------|
+| `keydown` / `keyup`                       | 按键按下/释放 |
+| `mousedown` / `mouseup`                   | 鼠标按下/释放 |
+| `mousemove`                               | 鼠标移动      |
+| `wheel`                                   | 滚轮滚动      |
+| `touchstart` / `touchmove` / `touchend`   | 触摸事件      |
+| `type`                                    | 输入文本      |
+| `wait`                                    | 事件间暂停    |
+
+参数：`humanize` 启用贝塞尔曲线移动和随机延迟。`tabId` 指定目标 Tab。`frame` 指定目标 iframe（CSS 选择器或索引）。均限 Extension 模式。
 
 ### extract - 内容提取
 
-| Type         | 描述                   |
-|--------------|----------------------|
-| `text`       | 提取文本内容               |
-| `html`       | 提取 HTML 源码           |
-| `attribute`  | 提取元素属性               |
-| `screenshot` | 截图                   |
-| `state`      | 获取页面状态（URL、标题、可交互元素） |
+| Type         | 描述                         |
+|--------------|------------------------------|
+| `text`       | 提取文本内容                  |
+| `html`       | 提取 HTML 源码               |
+| `attribute`  | 提取元素属性                  |
+| `screenshot` | 截图                          |
+| `state`      | 获取页面状态（URL、标题、可交互元素）|
+
+参数：`output` 将结果保存到文件。`tabId` 指定目标 Tab。`frame` 指定目标 iframe。均限 Extension 模式。
 
 ### wait - 等待条件
 
-| For          | 描述                                     |
-|--------------|----------------------------------------|
-| `element`    | 等待元素（visible/hidden/attached/detached） |
-| `navigation` | 等待导航完成                                 |
-| `time`       | 固定延迟                                   |
-| `idle`       | 等待网络空闲                                 |
+| For          | 描述                                         |
+|--------------|----------------------------------------------|
+| `element`    | 等待元素（visible/hidden/attached/detached）  |
+| `navigation` | 等待导航完成                                  |
+| `time`       | 固定延迟                                      |
+| `idle`       | 等待网络空闲                                  |
 
-### manage - 页面与环境管理
-
-| Action       | 描述                  |
-|--------------|---------------------|
-| `newPage`    | 新建页面/标签页            |
-| `closePage`  | 关闭页面                |
-| `clearCache` | 清除缓存/cookies/存储     |
-| `viewport`   | 设置视口大小              |
-| `userAgent`  | 设置 User-Agent       |
-| `emulate`    | 设备模拟（iPhone、iPad 等） |
-
-### logs - 浏览器日志
-
-| Type      | 描述                |
-|-----------|-------------------|
-| `console` | 控制台日志（支持级别过滤）     |
-| `network` | 网络请求日志（支持 URL 过滤） |
-
-### cookies - Cookie 管理
-
-| Action   | 描述           |
-|----------|--------------|
-| `get`    | 获取 cookies   |
-| `set`    | 设置 cookie    |
-| `delete` | 删除 cookie    |
-| `clear`  | 清空所有 cookies |
+参数：`tabId` 指定目标 Tab。`frame` 指定目标 iframe。均限 Extension 模式。
 
 ### evaluate - JavaScript 执行
 
-在页面上下文执行任意 JavaScript。
+在页面上下文执行 JavaScript。
+
+| 参数      | 描述                                                                 |
+|-----------|----------------------------------------------------------------------|
+| `script`  | JavaScript 代码（必需）。裸 `return` 语句自动包裹 IIFE               |
+| `args`    | 传递给脚本的参数（script 须为函数表达式）                             |
+| `mode`    | `precise`（默认，debugger API）或 `stealth`（JS 注入）                |
+| `output`  | 将结果保存到文件（字符串写入原始文本，其他类型 JSON 序列化）           |
+| `tabId`   | 指定目标 Tab（Extension 模式）                                        |
+| `frame`   | 指定目标 iframe（CSS 选择器或索引，Extension 模式）                    |
+| `timeout` | 端到端超时预算（毫秒）                                                |
+
+结果超过 100KB 时自动落盘到 `/tmp/`，返回文件路径和大小。
+
+### manage - 页面与环境管理
+
+| Action       | 描述                                             |
+|--------------|--------------------------------------------------|
+| `newPage`    | 新建页面/Tab                                      |
+| `closePage`  | 关闭页面                                          |
+| `clearCache` | 清除缓存/Cookie/存储                              |
+| `viewport`   | 设置视口大小                                      |
+| `userAgent`  | 设置 User-Agent                                   |
+| `emulate`    | 设备模拟（iPhone、iPad 等）                        |
+| `inputMode`  | 查询或设置输入模式（`precise` / `stealth`）        |
+| `stealth`    | 注入反检测脚本                                    |
+| `cdp`        | 发送原始 CDP 命令（高级，如 `Runtime.evaluate`）   |
+
+### logs - 浏览器日志
+
+| Type      | 描述                       |
+|-----------|----------------------------|
+| `console` | 控制台日志（支持级别过滤）  |
+| `network` | 网络请求日志（支持 URL 过滤）|
+
+参数：`output` 将结果保存到文件。`tabId` 指定目标 Tab（Extension 模式）。`frame` 不适用于日志。
+
+### cookies - Cookie 管理
+
+| Action   | 描述            |
+|----------|-----------------|
+| `get`    | 获取 Cookie     |
+| `set`    | 设置 Cookie     |
+| `delete` | 删除 Cookie     |
+| `clear`  | 清空所有 Cookie |
 
 ## Target：统一元素定位器
 
@@ -195,6 +239,9 @@ claude mcp add chrome -- node /path/to/mcp-chrome/dist/index.js
 // 按 CSS 选择器
 { css: "#login-form .submit-btn" }
 
+// 按 CSS + 文本（按文本内容过滤）
+{ css: "button", text: "提交", exact: true }
+
 // 按 XPath
 { xpath: "//button[@type='submit']" }
 
@@ -204,10 +251,10 @@ claude mcp add chrome -- node /path/to/mcp-chrome/dist/index.js
 
 ## 使用示例
 
-### 基础：连接和导航
+### 基础：列出 Tab 并导航
 
 ```
-browse(action="connect", port=9222)
+browse(action="list")
 browse(action="open", url="https://example.com")
 extract(type="state")
 ```
@@ -231,15 +278,12 @@ input(events=[
 ])
 ```
 
-### 复杂：Ctrl+点击 + 人类行为模拟
+### 多 Tab 操作（Extension 模式）
 
 ```
-input(events=[
-  { type: "keydown", key: "Control" },
-  { type: "mousedown", target: { css: ".item" }, button: "left" },
-  { type: "mouseup" },
-  { type: "keyup", key: "Control" }
-], humanize=true)
+// 对指定 Tab 操作，不切换焦点
+extract(type="screenshot", tabId="12345")
+evaluate(script="document.title", tabId="12345")
 ```
 
 ### 截图
@@ -248,8 +292,25 @@ input(events=[
 // 全页面
 extract(type="screenshot", fullPage=true)
 
-// 指定元素
-extract(type="screenshot", target={ css: "#chart" })
+// 保存到文件
+extract(type="screenshot", output="/tmp/screenshot.png")
+```
+
+### iframe 操作（Extension 模式）
+
+```
+// 通过 CSS 选择器指定 iframe
+evaluate(script="document.title", frame="iframe#main")
+
+// 通过索引指定 iframe
+extract(type="text", frame=0)
+
+// 在 iframe 内输入
+input(events=[
+  { type: "mousedown", target: { label: "用户名" } },
+  { type: "mouseup" },
+  { type: "type", text: "admin" }
+], frame="iframe.login-frame")
 ```
 
 ### 等待元素
@@ -261,25 +322,32 @@ wait(for="element", target={ text: "加载完成" }, state="visible")
 ## 架构
 
 ```
-┌─────────────────┐
-│   MCP 客户端     │
-│ (Claude 等)     │
-└────────┬────────┘
-         │ stdio (JSON-RPC)
-         ▼
-┌─────────────────┐
-│   MCP-Chrome    │
-│   (8 个工具)    │
-│  ├─ core/       │  Session, Locator, AutoWait
-│  ├─ cdp/        │  原生 CDP 客户端
-│  └─ tools/      │  工具实现
-└────────┬────────┘
-         │ WebSocket (CDP)
-         ▼
-┌─────────────────┐
-│  Chrome 浏览器   │
-│  (端口 9222)    │
-└─────────────────┘
+┌───────────────────┐
+│    MCP 客户端     │
+│   (Claude 等)     │
+└─────────┬─────────┘
+          │ stdio (JSON-RPC)
+          ▼
+┌───────────────────┐
+│    MCP-Chrome     │
+│   (8 个工具)      │
+│  ├─ core/         │  UnifiedSession, Locator, AutoWait
+│  ├─ cdp/          │  原生 CDP 客户端
+│  ├─ extension/    │  Extension 桥接（HTTP + WebSocket）
+│  └─ tools/        │  工具实现
+└────┬─────────┬────┘
+     │         │
+     │ HTTP/WS │ WebSocket (CDP)
+     │         │
+     ▼         ▼
+┌──────────┐  ┌──────────────────┐
+│ Extension│  │ Chrome (CDP)     │
+│ (19222+) │  │ (端口 9222)      │
+│          │  │ 独立浏览器实例    │
+│ 操控用户 │  └──────────────────┘
+│ 现有浏览 │
+│ 器       │
+└──────────┘
 ```
 
 ## 项目结构
@@ -299,18 +367,29 @@ mcp-chrome/
 │   │   ├── evaluate.ts
 │   │   └── schema.ts         # 公共 JSON Schema（Target oneOf）
 │   ├── core/                 # 核心抽象
-│   │   ├── session.ts        # 会话管理
-│   │   ├── locator.ts        # 元素定位器
+│   │   ├── unified-session.ts # 双模式会话（Extension + CDP）
+│   │   ├── session.ts        # CDP 会话管理
+│   │   ├── locator.ts        # 元素定位器（deadline 超时预算）
 │   │   ├── auto-wait.ts      # 自动等待机制
 │   │   ├── retry.ts          # 重试逻辑
 │   │   ├── types.ts          # 类型定义
 │   │   └── errors.ts         # 错误类型
+│   ├── extension/            # Extension 桥接
+│   │   ├── bridge.ts         # 高层 Extension API
+│   │   └── http-server.ts    # HTTP + WebSocket 服务器
 │   ├── cdp/                  # CDP 层
 │   │   ├── client.ts         # WebSocket CDP 客户端
 │   │   └── launcher.ts       # Chrome 启动器
 │   └── anti-detection/       # 反检测（可选）
 │       ├── injection.ts
 │       └── behavior.ts
+├── extension/                # Chrome Extension（Manifest V3）
+│   ├── manifest.json
+│   ├── src/
+│   │   ├── background/       # Service Worker
+│   │   ├── content/          # Content Scripts
+│   │   └── popup/            # Popup UI
+│   └── dist/                 # 构建产物（在 Chrome 中加载此目录）
 ├── scripts/
 │   ├── start-chrome.sh
 │   └── start-chrome-headless.sh
@@ -319,15 +398,19 @@ mcp-chrome/
 
 ## 安全说明
 
-- CDP 提供完整的浏览器控制能力，请仅在受信任的机器上使用
-- 默认调试端口仅绑定到 127.0.0.1
+- Extension 模式：共享浏览器会话，请仅在受信任的机器上使用
+- CDP 模式：通过 DevTools Protocol 提供完整浏览器控制能力
+- 默认端口仅绑定到 127.0.0.1（本地访问）
 - `evaluate` 工具可执行任意 JavaScript
+- `manage cdp` 操作可发送任意 CDP 命令
 - 网络日志可能包含敏感信息
 
 ## 已知限制
 
-- **单会话**：当前仅支持一个浏览器会话
 - **仅 Chrome**：仅支持 Chrome/Chromium 浏览器（不支持 Firefox/Safari）
+- **CDP 单会话**：CDP 模式仅支持一个浏览器会话
+- **Extension 需要 Chrome**：Extension 为 Manifest V3，仅限 Chrome
+- **iframe**：仅支持单层 iframe 定位（不支持嵌套 `>>` 语法）；仅限 Extension 模式
 
 ## 许可证
 
@@ -337,3 +420,4 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)。
 
 - [Model Context Protocol](https://modelcontextprotocol.io/) - MCP 规范
 - [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) - CDP 文档
+
