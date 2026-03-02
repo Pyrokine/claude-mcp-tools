@@ -9,190 +9,84 @@
  * - humanize 可选：行为模拟是可选功能
  */
 
+import type {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js'
 import {z} from 'zod'
 import {generateBezierPath, getMouseMoveDelay, getTypingDelay, randomDelay} from '../anti-detection/index.js'
-import {formatErrorResponse, getSession, getUnifiedSession} from '../core/index.js'
+import {formatErrorResponse, formatResponse, getSession, getUnifiedSession} from '../core/index.js'
 import type {InputEvent, Target} from '../core/types.js'
-import {targetJsonSchema, targetToFindParams, targetZodSchema} from './schema.js'
-
-/**
- * input 工具定义
- */
-export const inputToolDefinition = {
-    name: 'input',
-    description: '键鼠输入：键盘、鼠标及任意组合',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            events: {
-                type: 'array',
-                description: '事件序列',
-                items: {
-                    type: 'object',
-                    properties: {
-                        type: {
-                            type: 'string',
-                            enum: [
-                                'keydown',
-                                'keyup',
-                                'mousedown',
-                                'mouseup',
-                                'mousemove',
-                                'wheel',
-                                'touchstart',
-                                'touchmove',
-                                'touchend',
-                                'type',
-                                'wait',
-                            ],
-                            description: '事件类型',
-                        },
-                        key: {
-                            type: 'string',
-                            description: '按键（keydown/keyup）',
-                        },
-                        button: {
-                            type: 'string',
-                            enum: ['left', 'middle', 'right', 'back', 'forward'],
-                            description: '鼠标按钮',
-                        },
-                        target: {
-                            ...targetJsonSchema,
-                            description: '目标元素（mousemove/touchstart/touchmove 必填；mousedown/wheel/type 可选，用于先定位再操作）',
-                        },
-                        steps: {
-                            type: 'number',
-                            description: '移动步数（mousemove/touchmove）',
-                        },
-                        deltaX: {
-                            type: 'number',
-                            description: '水平滚动量',
-                        },
-                        deltaY: {
-                            type: 'number',
-                            description: '垂直滚动量',
-                        },
-                        text: {
-                            type: 'string',
-                            description: '输入文本',
-                        },
-                        delay: {
-                            type: 'number',
-                            description: '按键间隔毫秒',
-                        },
-                        ms: {
-                            type: 'number',
-                            description: '等待毫秒',
-                        },
-                    },
-                },
-            },
-            humanize: {
-                type: 'boolean',
-                description: '启用人类行为模拟（贝塞尔曲线移动、随机延迟）',
-            },
-            tabId: {
-                type: 'string',
-                description: '目标 Tab ID（可选，仅 Extension 模式）。不指定则使用当前 attach 的 tab。可操作非当前 attach 的 tab。CDP 模式下忽略此参数',
-            },
-            timeout: {
-                type: 'number',
-                description: '超时毫秒',
-            },
-            frame: {
-                oneOf: [{type: 'string'}, {type: 'number'}],
-                description: 'iframe 定位（可选，仅 Extension 模式）。CSS 选择器（如 "iframe#main"）或索引（如 0）。不指定则在主框架操作',
-            },
-        },
-        required: ['events'],
-    },
-}
+import {targetToFindParams, targetZodSchema} from './schema.js'
 
 /**
  * InputEvent schema
  */
 const inputEventSchema = z.object({
                                       type: z.enum([
-                                                       'keydown',
-                                                       'keyup',
-                                                       'mousedown',
-                                                       'mouseup',
-                                                       'mousemove',
-                                                       'wheel',
-                                                       'touchstart',
-                                                       'touchmove',
-                                                       'touchend',
-                                                       'type',
-                                                       'wait',
-                                                   ]),
-                                      key: z.string().optional(),
-                                      button: z.enum(['left', 'middle', 'right', 'back', 'forward']).optional(),
-                                      target: targetZodSchema.optional(),
-                                      steps: z.number().optional(),
-                                      deltaX: z.number().optional(),
-                                      deltaY: z.number().optional(),
-                                      text: z.string().optional(),
-                                      delay: z.number().optional(),
-                                      ms: z.number().optional(),
+                                                       'keydown', 'keyup', 'mousedown', 'mouseup', 'mousemove',
+                                                       'wheel', 'touchstart', 'touchmove', 'touchend', 'type', 'wait',
+                                                   ]).describe('事件类型'),
+                                      key: z.string().optional().describe('按键（keydown/keyup）'),
+                                      button: z.enum(['left', 'middle', 'right', 'back', 'forward'])
+                                               .optional()
+                                               .describe('鼠标按钮'),
+                                      target: targetZodSchema.optional().describe(
+                                          '目标元素（mousemove/touchstart/touchmove 必填；mousedown/wheel/type 可选，用于先定位再操作）'),
+                                      steps: z.number().optional().describe('移动步数（mousemove/touchmove）'),
+                                      deltaX: z.number().optional().describe('水平滚动量'),
+                                      deltaY: z.number().optional().describe('垂直滚动量'),
+                                      text: z.string().optional().describe('输入文本'),
+                                      delay: z.number().optional().describe('按键间隔毫秒'),
+                                      ms: z.number().optional().describe('等待毫秒'),
                                   })
 
 /**
  * input 参数 schema
  */
 const inputSchema = z.object({
-                                 events: z.array(inputEventSchema),
-                                 humanize: z.boolean().optional(),
-                                 tabId: z.string().optional(),
-                                 timeout: z.number().optional(),
-                                 frame: z.union([z.string(), z.number()]).optional(),
+                                 events: z.array(inputEventSchema).describe('事件序列'),
+                                 humanize: z.boolean().optional().describe('启用人类行为模拟（贝塞尔曲线移动、随机延迟）'),
+                                 tabId: z.string().optional().describe(
+                                     '目标 Tab ID（可选，仅 Extension 模式）。不指定则使用当前 attach 的 tab。可操作非当前 attach 的 tab。CDP 模式下忽略此参数'),
+                                 timeout: z.number().optional().describe('超时毫秒'),
+                                 frame: z.union([z.string(), z.number()]).optional().describe(
+                                     'iframe 定位（可选，仅 Extension 模式）。CSS 选择器（如 "iframe#main"）或索引（如 0）。不指定则在主框架操作'),
                              })
-
-type InputParams = z.infer<typeof inputSchema>;
 
 /**
  * input 工具处理器
  */
-export async function handleInput(params: unknown): Promise<{
+async function handleInput(args: z.infer<typeof inputSchema>): Promise<{
     content: Array<{ type: 'text'; text: string }>;
     isError?: boolean;
 }> {
     try {
-        const args           = inputSchema.parse(params)
         const unifiedSession = getUnifiedSession()
         const mode           = unifiedSession.getMode()
         const humanize       = args.humanize ?? false
 
         return await unifiedSession.withTabId(args.tabId, async () => {
-        return await unifiedSession.withFrame(args.frame, async () => {
+            return await unifiedSession.withFrame(args.frame, async () => {
 
-        // 根据连接模式选择执行方式
-        if (mode === 'extension') {
-            // Extension 模式：使用 debugger API
-            for (const event of args.events) {
-                await executeEventExtension(unifiedSession, event as InputEvent, humanize, args.timeout)
-            }
-        } else {
-            // CDP 模式：使用原有逻辑
-            const session = getSession()
-            for (const event of args.events) {
-                await executeEvent(session, event as InputEvent, humanize, args.timeout)
-            }
-        }
+                // 根据连接模式选择执行方式
+                if (mode === 'extension') {
+                    // Extension 模式：使用 debugger API
+                    for (const event of args.events) {
+                        await executeEventExtension(unifiedSession, event as InputEvent, humanize, args.timeout)
+                    }
+                } else {
+                    // CDP 模式：使用原有逻辑
+                    const session = getSession()
+                    for (const event of args.events) {
+                        await executeEvent(session, event as InputEvent, humanize, args.timeout)
+                    }
+                }
 
-        return {
-            content: [
-                {
-                    type: 'text',
-                    text: JSON.stringify({
-                                             success: true,
-                                             eventsExecuted: args.events.length,
-                                             mode,
-                                         }),
-                },
-            ],
-        }
+                return formatResponse({
+                                          success: true,
+                                          eventsExecuted: args.events.length,
+                                          mode,
+                                      })
 
-        }) // withFrame
+            }) // withFrame
         }) // withTabId
     } catch (error) {
         return formatErrorResponse(error)
@@ -210,13 +104,17 @@ async function executeEventExtension(
 ): Promise<void> {
     switch (event.type) {
         case 'keydown': {
-            if (!event.key) throw new Error('keydown 事件需要 key 参数')
+            if (!event.key) {
+                throw new Error('keydown 事件需要 key 参数')
+            }
             await unifiedSession.keyDown(event.key)
             break
         }
 
         case 'keyup': {
-            if (!event.key) throw new Error('keyup 事件需要 key 参数')
+            if (!event.key) {
+                throw new Error('keyup 事件需要 key 参数')
+            }
             await unifiedSession.keyUp(event.key)
             break
         }
@@ -236,7 +134,9 @@ async function executeEventExtension(
         }
 
         case 'mousemove': {
-            if (!event.target) throw new Error('mousemove 事件需要 target 参数')
+            if (!event.target) {
+                throw new Error('mousemove 事件需要 target 参数')
+            }
             const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
 
             if (humanize && event.steps && event.steps > 1) {
@@ -261,14 +161,18 @@ async function executeEventExtension(
         }
 
         case 'touchstart': {
-            if (!event.target) throw new Error('touchstart 事件需要 target 参数')
+            if (!event.target) {
+                throw new Error('touchstart 事件需要 target 参数')
+            }
             const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
             await unifiedSession.touchStart(point.x, point.y)
             break
         }
 
         case 'touchmove': {
-            if (!event.target) throw new Error('touchmove 事件需要 target 参数')
+            if (!event.target) {
+                throw new Error('touchmove 事件需要 target 参数')
+            }
             const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
             await unifiedSession.touchMove(point.x, point.y)
             break
@@ -280,7 +184,9 @@ async function executeEventExtension(
         }
 
         case 'type': {
-            if (!event.text) throw new Error('type 事件需要 text 参数')
+            if (!event.text) {
+                throw new Error('type 事件需要 text 参数')
+            }
 
             // 如果有 target，先点击目标（聚焦）
             if (event.target) {
@@ -303,13 +209,15 @@ async function executeEventExtension(
         }
 
         case 'wait': {
-            if (!event.ms) throw new Error('wait 事件需要 ms 参数')
+            if (!event.ms) {
+                throw new Error('wait 事件需要 ms 参数')
+            }
             await new Promise(resolve => setTimeout(resolve, event.ms))
             break
         }
 
         default:
-            throw new Error(`未知事件类型: ${(event as {type: string}).type}`)
+            throw new Error(`未知事件类型: ${(event as { type: string }).type}`)
     }
 }
 
@@ -320,19 +228,23 @@ async function getTargetPointExtension(
     unifiedSession: ReturnType<typeof getUnifiedSession>,
     target: Target,
     timeout?: number,
-): Promise<{x: number; y: number}> {
+): Promise<{ x: number; y: number }> {
     // 如果是坐标，直接返回
     if ('x' in target && 'y' in target) {
         return {x: target.x, y: target.y}
     }
 
-    const {selector, text, xpath} = targetToFindParams(target)
-    const elements = await unifiedSession.find(selector, text, xpath, timeout)
+    const {selector, text, xpath, nth: nthParam} = targetToFindParams(target as Target & { nth?: number })
+    const elements                               = await unifiedSession.find(selector, text, xpath, timeout)
     if (elements.length === 0) {
         throw new Error(`未找到目标元素: ${JSON.stringify(target)}`)
     }
 
-    const rect = elements[0].rect
+    const nth = nthParam ?? 0
+    if (nth >= elements.length) {
+        throw new Error(`第 ${nth} 个匹配元素不存在（共 ${elements.length} 个）`)
+    }
+    const rect = elements[nth].rect
     return {
         x: rect.x + rect.width / 2,
         y: rect.y + rect.height / 2,
@@ -534,3 +446,12 @@ async function getTargetPoint(
     return locator.getClickablePoint()
 }
 
+/**
+ * 注册 input 工具
+ */
+export function registerInputTool(server: McpServer): void {
+    server.registerTool('input', {
+        description: '键鼠输入：键盘、鼠标及任意组合',
+        inputSchema: inputSchema,
+    }, (args) => handleInput(args))
+}

@@ -8,7 +8,7 @@
 import {ExtensionHttpServer} from './http-server.js'
 
 /** RPC 传输余量（毫秒）：给网络往返和 Extension 处理留出的额外时间 */
-const RPC_MARGIN = 5000
+const RPC_MARGIN        = 5000
 /** goBack/goForward 信号窗口（毫秒）：Extension 等待导航开始的上限 */
 const NAV_SIGNAL_WINDOW = 5000
 
@@ -24,15 +24,15 @@ export interface ExtensionBridgeOptions {
 
 export class ExtensionBridge {
     private httpServer: ExtensionHttpServer
-    private currentTabId: number | null = null
-    private currentFrameId: number = 0
+    private currentTabId: number | null   = null
+    private currentFrameId: number        = 0
     private state: SimplePageState | null = null
 
     constructor(options: ExtensionBridgeOptions = {}) {
         this.httpServer = new ExtensionHttpServer({
-            port: options.port,
-            autoPort: true,
-        })
+                                                      port: options.port,
+                                                      autoPort: true,
+                                                  })
     }
 
     async start(): Promise<void> {
@@ -70,18 +70,25 @@ export class ExtensionBridge {
         managed?: boolean
     }>> {
         const result = await this.httpServer.sendCommand('tabs_list', {})
-        return result as Array<{id: number; url: string; title: string; active: boolean; groupId?: number; managed?: boolean}>
+        return result as Array<{
+            id: number;
+            url: string;
+            title: string;
+            active: boolean;
+            groupId?: number;
+            managed?: boolean
+        }>
     }
 
-    async createTab(url?: string, timeout?: number): Promise<{id: number; url: string; title: string}> {
-        const rpcTimeout = timeout !== undefined ? timeout + RPC_MARGIN : undefined
-        const result = await this.httpServer.sendCommand('tabs_create', {
+    async createTab(url?: string, timeout?: number): Promise<{ id: number; url: string; title: string }> {
+        const rpcTimeout  = timeout !== undefined ? timeout + RPC_MARGIN : undefined
+        const result      = await this.httpServer.sendCommand('tabs_create', {
             url,
             active: false,
             waitUntil: 'load',
             timeout,
         }, rpcTimeout)
-        const tab = result as {id: number; url: string; title: string}
+        const tab         = result as { id: number; url: string; title: string }
         // 自动切换到新创建的 tab，后续操作立即生效
         this.currentTabId = tab.id
         this.updateState(tab.url, tab.title)
@@ -92,66 +99,70 @@ export class ExtensionBridge {
         await this.httpServer.sendCommand('tabs_close', {tabId})
         if (this.currentTabId === tabId) {
             this.currentTabId = null
-            this.state = null
+            this.state        = null
         }
     }
 
     async activateTab(tabId: number): Promise<void> {
-        const result = await this.httpServer.sendCommand('tabs_activate', {tabId})
-        const tab = result as {id: number; url: string; title: string}
+        const result      = await this.httpServer.sendCommand('tabs_activate', {tabId})
+        const tab         = result as { id: number; url: string; title: string }
         this.currentTabId = tab.id
         this.updateState(tab.url, tab.title)
     }
 
     // ==================== 导航操作 ====================
 
-    async navigate(url: string, options?: {waitUntil?: string; timeout?: number}): Promise<void> {
+    async navigate(url: string, options?: { waitUntil?: string; timeout?: number }): Promise<void> {
         const rpcTimeout = options?.timeout !== undefined ? options.timeout + RPC_MARGIN : undefined
-        const result = await this.httpServer.sendCommand('navigate', {
+        const result     = await this.httpServer.sendCommand('navigate', {
             tabId: this.currentTabId,
             url,
             waitUntil: options?.waitUntil ?? 'load',
             timeout: options?.timeout,
         }, rpcTimeout)
-        const tab = result as {url: string; title: string}
+        const tab        = result as { url: string; title: string }
         this.updateState(tab.url, tab.title)
     }
 
-    async goBack(timeout?: number): Promise<{url: string; title: string; navigated: boolean}> {
+    async goBack(timeout?: number): Promise<{ url: string; title: string; navigated: boolean }> {
         // 默认：NAV_SIGNAL_WINDOW + 导航等待（默认 30s）+ RPC_MARGIN = 40s
         // 调用方传 timeout 时：timeout 即导航超时 + 信号窗口 + 传输余量
-        const rpcTimeout = timeout !== undefined ? timeout + NAV_SIGNAL_WINDOW + RPC_MARGIN : 30000 + NAV_SIGNAL_WINDOW + RPC_MARGIN
-        const result = await this.httpServer.sendCommand('go_back', {
+        const rpcTimeout = timeout !== undefined ?
+                           timeout + NAV_SIGNAL_WINDOW + RPC_MARGIN :
+                           30000 + NAV_SIGNAL_WINDOW + RPC_MARGIN
+        const result     = await this.httpServer.sendCommand('go_back', {
             tabId: this.currentTabId,
             waitUntil: 'load',
             timeout,
-        }, rpcTimeout) as {url: string; title: string; navigated: boolean}
+        }, rpcTimeout) as { url: string; title: string; navigated: boolean }
         this.updateState(result.url, result.title)
         return result
     }
 
-    async goForward(timeout?: number): Promise<{url: string; title: string; navigated: boolean}> {
+    async goForward(timeout?: number): Promise<{ url: string; title: string; navigated: boolean }> {
         // 默认：NAV_SIGNAL_WINDOW + 导航等待（默认 30s）+ RPC_MARGIN = 40s
         // 调用方传 timeout 时：timeout 即导航超时 + 信号窗口 + 传输余量
-        const rpcTimeout = timeout !== undefined ? timeout + NAV_SIGNAL_WINDOW + RPC_MARGIN : 30000 + NAV_SIGNAL_WINDOW + RPC_MARGIN
-        const result = await this.httpServer.sendCommand('go_forward', {
+        const rpcTimeout = timeout !== undefined ?
+                           timeout + NAV_SIGNAL_WINDOW + RPC_MARGIN :
+                           30000 + NAV_SIGNAL_WINDOW + RPC_MARGIN
+        const result     = await this.httpServer.sendCommand('go_forward', {
             tabId: this.currentTabId,
             waitUntil: 'load',
             timeout,
-        }, rpcTimeout) as {url: string; title: string; navigated: boolean}
+        }, rpcTimeout) as { url: string; title: string; navigated: boolean }
         this.updateState(result.url, result.title)
         return result
     }
 
     async reload(ignoreCache = false, waitUntil?: string, timeout?: number): Promise<void> {
         const rpcTimeout = timeout !== undefined ? timeout + RPC_MARGIN : undefined
-        const result = await this.httpServer.sendCommand('reload', {
+        const result     = await this.httpServer.sendCommand('reload', {
             tabId: this.currentTabId,
             ignoreCache,
             waitUntil: waitUntil ?? 'load',
             timeout,
         }, rpcTimeout)
-        const tab = result as {url: string; title: string}
+        const tab        = result as { url: string; title: string }
         this.updateState(tab.url, tab.title)
     }
 
@@ -162,19 +173,22 @@ export class ExtensionBridge {
         depth?: number
         maxLength?: number
         refId?: string
-    }): Promise<{pageContent: string; viewport: {width: number; height: number}; error?: string}> {
+    }): Promise<{ pageContent: string; viewport: { width: number; height: number }; error?: string }> {
         return await this.httpServer.sendCommand('read_page', {
             tabId: this.currentTabId,
             frameId: this.currentFrameId || undefined,
             ...options,
-        }) as {pageContent: string; viewport: {width: number; height: number}; error?: string}
+        }) as { pageContent: string; viewport: { width: number; height: number }; error?: string }
     }
 
-    async screenshot(options?: {format?: string; quality?: number; fullPage?: boolean}): Promise<{data: string; format: string}> {
+    async screenshot(options?: { format?: string; quality?: number; fullPage?: boolean }): Promise<{
+        data: string;
+        format: string
+    }> {
         return await this.httpServer.sendCommand('screenshot', {
             tabId: this.currentTabId,
             ...options,
-        }) as {data: string; format: string}
+        }) as { data: string; format: string }
     }
 
     // ==================== DOM 操作 ====================
@@ -184,7 +198,7 @@ export class ExtensionBridge {
             tabId: this.currentTabId,
             frameId: this.currentFrameId || undefined,
             refId,
-        }) as {success: boolean; error?: string}
+        }) as { success: boolean; error?: string }
 
         if (!result.success) {
             throw new Error(result.error || 'Click failed')
@@ -198,7 +212,7 @@ export class ExtensionBridge {
             refId,
             text,
             clear,
-        }) as {success: boolean; error?: string}
+        }) as { success: boolean; error?: string }
 
         if (!result.success) {
             throw new Error(result.error || 'Type failed')
@@ -218,12 +232,12 @@ export class ExtensionBridge {
     async evaluate(code: string, timeout?: number, budget?: number): Promise<unknown> {
         // budget 覆盖 rpcTimeout：轮询调用方传入端到端预算；一次性调用不传，保留 RPC_MARGIN
         const rpcTimeout = budget ?? (timeout !== undefined ? timeout + RPC_MARGIN : undefined)
-        const result = await this.httpServer.sendCommand('evaluate', {
+        const result     = await this.httpServer.sendCommand('evaluate', {
             tabId: this.currentTabId,
             frameId: this.currentFrameId || undefined,
             code,
             timeout,
-        }, rpcTimeout) as {success: boolean; result?: string; error?: string}
+        }, rpcTimeout) as { success: boolean; result?: string; error?: string }
 
         if (!result.success) {
             throw new Error(result.error || 'Evaluate failed')
@@ -236,7 +250,7 @@ export class ExtensionBridge {
         refId: string
         tag: string
         text: string
-        rect: {x: number; y: number; width: number; height: number}
+        rect: { x: number; y: number; width: number; height: number }
     }>> {
         return await this.httpServer.sendCommand('find', {
             tabId: this.currentTabId,
@@ -248,7 +262,7 @@ export class ExtensionBridge {
             refId: string
             tag: string
             text: string
-            rect: {x: number; y: number; width: number; height: number}
+            rect: { x: number; y: number; width: number; height: number }
         }>
     }
 
@@ -257,7 +271,7 @@ export class ExtensionBridge {
             tabId: this.currentTabId,
             frameId: this.currentFrameId || undefined,
             selector,
-        }) as {text: string}
+        }) as { text: string }
         return result.text
     }
 
@@ -267,18 +281,22 @@ export class ExtensionBridge {
             frameId: this.currentFrameId || undefined,
             selector,
             outer,
-        }) as {html: string}
+        }) as { html: string }
         return result.html
     }
 
-    async getAttribute(selector: string | undefined, refId: string | undefined, attribute: string): Promise<string | null> {
+    async getAttribute(
+        selector: string | undefined,
+        refId: string | undefined,
+        attribute: string,
+    ): Promise<string | null> {
         const result = await this.httpServer.sendCommand('get_attribute', {
             tabId: this.currentTabId,
             frameId: this.currentFrameId || undefined,
             selector,
             refId,
             attribute,
-        }) as {value: string | null}
+        }) as { value: string | null }
         return result.value
     }
 
@@ -313,40 +331,18 @@ export class ExtensionBridge {
         await this.httpServer.sendCommand('cookies_delete', {url, name})
     }
 
-    async clearCookies(filter?: {url?: string; domain?: string}): Promise<{count: number}> {
-        return await this.httpServer.sendCommand('cookies_clear', filter ?? {}) as {count: number}
-    }
-
-    // ==================== Tab Groups ====================
-
-    async createTabGroup(tabIds: number[], title?: string, color?: string): Promise<{groupId: number}> {
-        return await this.httpServer.sendCommand('tabgroup_create', {
-            tabIds,
-            title,
-            color,
-        }) as {groupId: number}
-    }
-
-    async addToTabGroup(tabId: number, groupId?: number): Promise<void> {
-        await this.httpServer.sendCommand('tabgroup_add', {tabId, groupId})
+    async clearCookies(filter?: { url?: string; domain?: string }): Promise<{ count: number }> {
+        return await this.httpServer.sendCommand('cookies_clear', filter ?? {}) as { count: number }
     }
 
     // ==================== Debugger (CDP via Extension) ====================
 
-    async debuggerAttach(tabId?: number): Promise<{tabId: number}> {
-        const result = await this.httpServer.sendCommand('debugger_attach', {
-            tabId: tabId ?? this.currentTabId,
-        })
-        return result as {tabId: number}
-    }
-
-    async debuggerDetach(tabId?: number): Promise<void> {
-        await this.httpServer.sendCommand('debugger_detach', {
-            tabId: tabId ?? this.currentTabId,
-        })
-    }
-
-    async debuggerSend(method: string, params?: Record<string, unknown>, tabId?: number, timeout?: number): Promise<unknown> {
+    async debuggerSend(
+        method: string,
+        params?: Record<string, unknown>,
+        tabId?: number,
+        timeout?: number,
+    ): Promise<unknown> {
         return await this.httpServer.sendCommand('debugger_send', {
             tabId: tabId ?? this.currentTabId,
             method,
@@ -370,13 +366,18 @@ export class ExtensionBridge {
         })
     }
 
-    async inputMouse(type: 'mousePressed' | 'mouseReleased' | 'mouseMoved' | 'mouseWheel', x: number, y: number, options: {
-        button?: 'left' | 'middle' | 'right'
-        clickCount?: number
-        deltaX?: number
-        deltaY?: number
-        modifiers?: number
-    } = {}): Promise<void> {
+    async inputMouse(
+        type: 'mousePressed' | 'mouseReleased' | 'mouseMoved' | 'mouseWheel',
+        x: number,
+        y: number,
+        options: {
+            button?: 'left' | 'middle' | 'right'
+            clickCount?: number
+            deltaX?: number
+            deltaY?: number
+            modifiers?: number
+        } = {},
+    ): Promise<void> {
         await this.httpServer.sendCommand('input_mouse', {
             tabId: this.currentTabId,
             type,
@@ -432,21 +433,17 @@ export class ExtensionBridge {
         const result = await this.httpServer.sendCommand('console_get', {
             tabId: this.currentTabId,
             ...options,
-        }) as {messages: Array<{
-            source: string
-            level: string
-            text: string
-            timestamp: number
-            url?: string
-            lineNumber?: number
-        }>}
+        }) as {
+            messages: Array<{
+                source: string
+                level: string
+                text: string
+                timestamp: number
+                url?: string
+                lineNumber?: number
+            }>
+        }
         return result.messages
-    }
-
-    async consoleClear(): Promise<void> {
-        await this.httpServer.sendCommand('console_clear', {
-            tabId: this.currentTabId,
-        })
     }
 
     // ==================== 网络日志 ====================
@@ -471,34 +468,20 @@ export class ExtensionBridge {
         const result = await this.httpServer.sendCommand('network_get', {
             tabId: this.currentTabId,
             ...options,
-        }) as {requests: Array<{
-            url: string
-            method: string
-            status?: number
-            type: string
-            timestamp: number
-            duration?: number
-        }>}
+        }) as {
+            requests: Array<{
+                url: string
+                method: string
+                status?: number
+                type: string
+                timestamp: number
+                duration?: number
+            }>
+        }
         return result.requests
     }
 
-    async networkClear(): Promise<void> {
-        await this.httpServer.sendCommand('network_clear', {
-            tabId: this.currentTabId,
-        })
-    }
-
     // ==================== Stealth 模式（JS 事件模拟，无 debugger）====================
-
-    async stealthClick(x: number, y: number, button = 'left'): Promise<void> {
-        await this.httpServer.sendCommand('stealth_click', {
-            tabId: this.currentTabId,
-            frameId: this.currentFrameId || undefined,
-            x,
-            y,
-            button,
-        })
-    }
 
     async stealthType(text: string, delay = 0): Promise<void> {
         await this.httpServer.sendCommand('stealth_type', {
@@ -563,8 +546,8 @@ export class ExtensionBridge {
      * 在指定 iframe 中以 precise 模式执行 JS（通过 contextId 绕过 CSP）
      */
     async evaluateInFrame(frameId: number, expression: string, timeout?: number): Promise<{
-        result?: {value?: unknown}
-        exceptionDetails?: {text: string}
+        result?: { value?: unknown }
+        exceptionDetails?: { text: string }
     }> {
         return await this.httpServer.sendCommand('evaluate_in_frame', {
             tabId: this.currentTabId,
@@ -573,27 +556,17 @@ export class ExtensionBridge {
             returnByValue: true,
             awaitPromise: true,
             timeout,
-        }, timeout) as {result?: {value?: unknown}; exceptionDetails?: {text: string}}
+        }, timeout) as { result?: { value?: unknown }; exceptionDetails?: { text: string } }
     }
 
     /**
      * 解析 iframe 选择器/索引 → frameId
      */
-    async resolveFrame(frame: string | number): Promise<{frameId: number}> {
+    async resolveFrame(frame: string | number): Promise<{ frameId: number }> {
         return await this.httpServer.sendCommand('resolve_frame', {
             tabId: this.currentTabId,
             frame,
-        }) as {frameId: number}
-    }
-
-    /**
-     * 获取所有 frame 信息
-     */
-    async getAllFrames(): Promise<Array<{frameId: number; parentFrameId: number; url: string}>> {
-        const result = await this.httpServer.sendCommand('get_all_frames', {
-            tabId: this.currentTabId,
-        }) as {frames: Array<{frameId: number; parentFrameId: number; url: string}>}
-        return result.frames
+        }) as { frameId: number }
     }
 
     private updateState(url: string, title: string): void {

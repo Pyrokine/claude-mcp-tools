@@ -9,6 +9,7 @@
 import {ExtensionBridge} from '../extension/index.js'
 import {getSession as getCdpSession} from './session.js'
 import type {TargetInfo, WaitUntil} from './types.js'
+import {MODIFIER_KEYS} from './types.js'
 
 export type ConnectionMode = 'extension' | 'cdp' | 'none'
 export type InputMode = 'stealth' | 'precise'  // stealth=JS模拟, precise=debugger API
@@ -20,15 +21,18 @@ interface UnifiedSessionState {
 
 class UnifiedSessionManager {
     private static instance: UnifiedSessionManager
-    private static readonly CONNECTION_COOLDOWN = 30000 // 连接失败后 30 秒内不重试
-    private extensionBridge: ExtensionBridge | null = null
-    private inputMode: InputMode = 'precise'  // 默认使用 precise 模式，可绕过 CSP 限制
-    private currentMousePosition: {x: number; y: number} = {x: 0, y: 0}  // 跟踪鼠标位置
-    private lastConnectionFailure = 0
-    private tabSwitchLock: Promise<void> = Promise.resolve()  // 串行化 tab 切换，防止并发竞态
-    private requireExtension = false  // 指定 tabId 或 frame 时为 true，禁止 CDP 回退
+    private static readonly CONNECTION_COOLDOWN            = 30000 // 连接失败后 30 秒内不重试
+    private extensionBridge: ExtensionBridge | null        = null
+    private inputMode: InputMode                           = 'precise'  // 默认使用 precise 模式，可绕过 CSP 限制
+    private currentMousePosition: { x: number; y: number } = {x: 0, y: 0}  // 跟踪鼠标位置
+    /** 当前按下的修饰键位掩码 */
+    private modifiers                                      = 0
+    private lastConnectionFailure                          = 0
+    private tabSwitchLock: Promise<void>                   = Promise.resolve()  // 串行化 tab 切换，防止并发竞态
+    private requireExtension                               = false  // 指定 tabId 或 frame 时为 true，禁止 CDP 回退
 
-    private constructor() {}
+    private constructor() {
+    }
 
     static getInstance(): UnifiedSessionManager {
         if (!UnifiedSessionManager.instance) {
@@ -79,7 +83,7 @@ class UnifiedSessionManager {
     /**
      * 获取当前鼠标位置
      */
-    getMousePosition(): {x: number; y: number} {
+    getMousePosition(): { x: number; y: number } {
         return {...this.currentMousePosition}
     }
 
@@ -94,30 +98,10 @@ class UnifiedSessionManager {
     }
 
     /**
-     * 是否已连接（任一模式）
-     */
-    isConnected(): boolean {
-        return this.getMode() !== 'none'
-    }
-
-    /**
      * 是否 Extension 已连接
      */
     isExtensionConnected(): boolean {
         return this.extensionBridge?.isConnected() ?? false
-    }
-
-    /**
-     * 检查 CDP 回退是否允许
-     *
-     * 当 requireExtension 为 true（tabId 或 frame 已指定）时，CDP 回退会操作错误目标，必须阻止。
-     * 允许时返回 false（供 ensureExtensionConnected 直接返回），不允许时抛出。
-     */
-    private assertCdpFallbackAllowed(): false {
-        if (this.requireExtension) {
-            throw new Error('Extension 已断开，当前操作需要 Extension（指定 tabId 或 frame）时不可回退 CDP（操作目标不一致）')
-        }
-        return false
     }
 
     /**
@@ -126,64 +110,6 @@ class UnifiedSessionManager {
      */
     isExtensionModeEnabled(): boolean {
         return this.extensionBridge !== null
-    }
-
-    /**
-     * 等待 Extension 连接
-     * @param timeout 超时时间，0 表示无限等待
-     */
-    async waitForExtensionConnection(timeout = 0): Promise<boolean> {
-        if (!this.extensionBridge) {
-            return false
-        }
-        return this.extensionBridge.waitForConnection(timeout)
-    }
-
-    /**
-     * 确保 Extension 已连接，如果断开则等待重连
-     * 返回 true 表示 Extension 可用，false 表示应 fallback 到 CDP
-     *
-     * 设计理念：Server 和 Extension 的启动时机完全独立，无任何要求。
-     * - 先装 Extension，一个月/一年后启动 Server → 能连上
-     * - 先启动 Server，再打开 Chrome → 能连上
-     * - 关闭再打开任何一方 → 能自动重连
-     *
-     * 超时设为 30 秒：足够等待 Extension 启动，但不会永远卡住。
-     *
-     * @param maxWait 调用方的端到端预算（毫秒）。传入时取 min(maxWait, 30000) 作为连接等待上限，
-     *               避免工具 timeout 被连接等待吞掉。不传则使用默认 30s。
-     */
-    private async ensureExtensionConnected(maxWait?: number): Promise<boolean> {
-        if (!this.extensionBridge) {
-            return this.assertCdpFallbackAllowed()
-        }
-        if (this.extensionBridge.isConnected()) {
-            return true
-        }
-        // CDP 已连接时跳过 Extension 等待，直接使用 CDP 回退
-        if (getCdpSession().isConnected()) {
-            return this.assertCdpFallbackAllowed()
-        }
-        // 冷却期内不重复等待，避免每次操作都阻塞 30 秒
-        if (Date.now() - this.lastConnectionFailure < UnifiedSessionManager.CONNECTION_COOLDOWN) {
-            return this.assertCdpFallbackAllowed()
-        }
-        // Extension 服务器已启动但断开连接，等待重连
-        const waitTimeout = maxWait !== undefined ? Math.min(maxWait, 30000) : 30000
-        if (waitTimeout <= 0) {
-            return this.assertCdpFallbackAllowed()
-        }
-        console.error(`[MCP] Waiting for Chrome Extension connection (${waitTimeout}ms timeout)...`)
-        console.error('[MCP] Please ensure Chrome is running with MCP Chrome extension installed.')
-        const connected = await this.extensionBridge.waitForConnection(waitTimeout)
-        if (connected) {
-            console.error('[MCP] Chrome Extension connected successfully')
-            this.lastConnectionFailure = 0
-            return true
-        }
-        console.error('[MCP] Chrome Extension connection timeout')
-        this.lastConnectionFailure = Date.now()
-        return this.assertCdpFallbackAllowed()
     }
 
     /**
@@ -197,7 +123,7 @@ class UnifiedSessionManager {
         incognito?: boolean
         timeout?: number
         stealth?: 'off' | 'safe' | 'aggressive'
-    } = {}): Promise<TargetInfo & {mode: ConnectionMode}> {
+    } = {}): Promise<TargetInfo & { mode: ConnectionMode }> {
         // 优先检查 Extension 是否已连接，如果断开则等待重连（受 timeout 约束）
         if (await this.ensureExtensionConnected(options.timeout)) {
             // createTab 会设置 currentTabId，需要加锁
@@ -222,28 +148,12 @@ class UnifiedSessionManager {
     }
 
     /**
-     * 连接到已运行的浏览器（CDP 模式）
-     */
-    async connect(options: {
-        host?: string
-        port: number
-        timeout?: number
-        stealth?: 'off' | 'safe' | 'aggressive'
-    }): Promise<TargetInfo & {mode: ConnectionMode}> {
-        const target = await getCdpSession().connect(options)
-        return {
-            ...target,
-            mode: 'cdp',
-        }
-    }
-
-    /**
      * 列出所有页面
      */
-    async listTargets(): Promise<Array<TargetInfo & {mode: ConnectionMode; managed?: boolean; isActive?: boolean}>> {
+    async listTargets(): Promise<Array<TargetInfo & { mode: ConnectionMode; managed?: boolean; isActive?: boolean }>> {
         // 优先使用 Extension，如果断开则等待重连
         if (await this.ensureExtensionConnected()) {
-            const tabs = await this.extensionBridge!.listTabs()
+            const tabs         = await this.extensionBridge!.listTabs()
             const currentTabId = this.extensionBridge!.getCurrentTabId()
             return tabs.map(tab => ({
                 targetId: String(tab.id),
@@ -257,7 +167,7 @@ class UnifiedSessionManager {
         }
 
         if (getCdpSession().isConnected()) {
-            const targets = await getCdpSession().listTargets()
+            const targets         = await getCdpSession().listTargets()
             const currentTargetId = getCdpSession().getState()?.targetId
             return targets.map(t => ({
                 ...t,
@@ -272,7 +182,7 @@ class UnifiedSessionManager {
     /**
      * 导航到 URL
      */
-    async navigate(url: string, options: {wait?: WaitUntil; timeout?: number} = {}): Promise<void> {
+    async navigate(url: string, options: { wait?: WaitUntil; timeout?: number } = {}): Promise<void> {
         if (await this.ensureExtensionConnected(options.timeout)) {
             // 加锁保护 currentTabId，防止并发 withTabId 将命令路由到临时切换的 tab
             await this.withTabLock(async () => {
@@ -290,7 +200,7 @@ class UnifiedSessionManager {
     /**
      * 后退
      */
-    async goBack(timeout?: number): Promise<{navigated: boolean}> {
+    async goBack(timeout?: number): Promise<{ navigated: boolean }> {
         if (await this.ensureExtensionConnected(timeout)) {
             return this.withTabLock(async () => {
                 const result = await this.extensionBridge!.goBack(timeout)
@@ -303,7 +213,7 @@ class UnifiedSessionManager {
     /**
      * 前进
      */
-    async goForward(timeout?: number): Promise<{navigated: boolean}> {
+    async goForward(timeout?: number): Promise<{ navigated: boolean }> {
         if (await this.ensureExtensionConnected(timeout)) {
             return this.withTabLock(async () => {
                 const result = await this.extensionBridge!.goForward(timeout)
@@ -316,7 +226,7 @@ class UnifiedSessionManager {
     /**
      * 刷新
      */
-    async reload(options: {ignoreCache?: boolean; waitUntil?: string; timeout?: number} = {}): Promise<void> {
+    async reload(options: { ignoreCache?: boolean; waitUntil?: string; timeout?: number } = {}): Promise<void> {
         if (await this.ensureExtensionConnected(options.timeout)) {
             await this.withTabLock(async () => {
                 await this.extensionBridge!.reload(options.ignoreCache, options.waitUntil, options.timeout)
@@ -334,19 +244,21 @@ class UnifiedSessionManager {
         depth?: number
         maxLength?: number
         refId?: string
-    }): Promise<{pageContent: string; viewport: {width: number; height: number}; error?: string}> {
+    }): Promise<{ pageContent: string; viewport: { width: number; height: number }; error?: string }> {
         if (await this.ensureExtensionConnected()) {
             return this.extensionBridge!.readPage(options)
         }
 
         // CDP 模式使用 getPageState
-        const state = await getCdpSession().getPageState()
+        const state    = await getCdpSession().getPageState()
         const elements = state.elements || []
 
         // 构建简单的文本表示
         const lines = elements.map(e => {
             let line = e.role
-            if (e.name) line += ` "${e.name}"`
+            if (e.name) {
+                line += ` "${e.name}"`
+            }
             return line
         })
 
@@ -359,13 +271,18 @@ class UnifiedSessionManager {
     /**
      * 截图
      */
-    async screenshot(options?: {format?: string; quality?: number; fullPage?: boolean}): Promise<string> {
+    async screenshot(options?: {
+        format?: string;
+        quality?: number;
+        fullPage?: boolean;
+        scale?: number
+    }): Promise<string> {
         if (await this.ensureExtensionConnected()) {
             const result = await this.extensionBridge!.screenshot(options)
             return result.data
         }
 
-        return getCdpSession().screenshot(options?.fullPage)
+        return getCdpSession().screenshot(options?.fullPage, options?.scale, options?.format, options?.quality)
     }
 
     /**
@@ -415,21 +332,26 @@ class UnifiedSessionManager {
      * stealth 模式：使用 chrome.scripting.executeScript（受 CSP 限制）
      * precise 模式：使用 debugger API Runtime.evaluate（可绕过 CSP）
      *
-     * 使用 args 时 script 必须是函数表达式，会被包装为 IIFE：(script)(arg1, arg2, ...)
+     * 使用 args 时 script 必须是函数表达式，如 "(x) => x + 1"。
+     * precise 模式通过 callFunctionOn 传递参数（支持大 payload），stealth 模式仍用字符串拼接。
+     * @param code JavaScript 代码
+     * @param mode 执行模式（stealth/precise）
      * @param timeout 端到端预算（毫秒），同时作为脚本执行超时和 sendCommand 的端到端预算
+     * @param args 传递给函数的参数
      */
     async evaluate<T>(code: string, mode?: InputMode, timeout?: number, args?: unknown[]): Promise<T> {
         const effectiveMode = mode ?? this.inputMode
+        const hasArgs       = args && args.length > 0
 
-        // 检测裸 return 语句，自动包裹 IIFE
-        // 排除已经是函数表达式或 IIFE 的情况
+        // 检测裸 return 语句，自动包裹 IIFE（仅无 args 时）
         let expression = code
-        if (/\breturn\b/.test(code) && !/^\s*([(\[]|function\b|async\b|class\b)/.test(code)) {
+        if (!hasArgs && /\breturn\b/.test(code) && !/^\s*([(\[]|function\b|async\b|class\b)/.test(code)) {
             expression = `(() => { ${code} })()`
         }
-        if (args && args.length > 0) {
+        // stealth 模式：args 只能通过字符串拼接（chrome.scripting 不支持协议级参数传递）
+        if (hasArgs && effectiveMode === 'stealth') {
             const argsStr = args.map(a => JSON.stringify(a)).join(', ')
-            expression = `(${code})(${argsStr})`
+            expression    = `(${code})(${argsStr})`
         }
 
         if (timeout !== undefined) {
@@ -448,11 +370,25 @@ class UnifiedSessionManager {
         // Extension 路径
         const currentFrameId = this.extensionBridge!.getCurrentFrameId()
         if (effectiveMode === 'precise') {
+            // precise + args + 主 frame：使用 callFunctionOn 避免大 payload 字符串拼接
+            if (hasArgs && currentFrameId === 0) {
+                return this.callFunctionOn<T>(code, args, timeout)
+            }
+
             if (currentFrameId !== 0) {
-                // iframe 上下文：通过 evaluateInFrame 使用 contextId 精确定位
-                const result = await this.extensionBridge!.evaluateInFrame(currentFrameId, expression, timeout) as {
-                    result?: {value?: T}
-                    exceptionDetails?: {text: string}
+                // iframe：args 仍用字符串拼接（evaluateInFrame 使用 expression 字符串）
+                let iframeExpression = expression
+                if (hasArgs) {
+                    const argsStr    = args.map(a => JSON.stringify(a)).join(', ')
+                    iframeExpression = `(${code})(${argsStr})`
+                }
+                const result = await this.extensionBridge!.evaluateInFrame(
+                    currentFrameId,
+                    iframeExpression,
+                    timeout,
+                ) as {
+                    result?: { value?: T }
+                    exceptionDetails?: { text: string }
                 }
                 if (result.exceptionDetails) {
                     throw new Error(result.exceptionDetails.text)
@@ -460,7 +396,7 @@ class UnifiedSessionManager {
                 return result.result?.value as T
             }
 
-            // 主 frame：直接 Runtime.evaluate
+            // 主 frame，无 args：直接 Runtime.evaluate
             const params: Record<string, unknown> = {
                 expression,
                 returnByValue: true,
@@ -471,8 +407,8 @@ class UnifiedSessionManager {
             }
             // timeout 即端到端预算，直接作为 RPC 超时（不额外加 margin）
             const result = await this.extensionBridge!.debuggerSend('Runtime.evaluate', params, undefined, timeout) as {
-                result?: {value?: T}
-                exceptionDetails?: {text: string}
+                result?: { value?: T }
+                exceptionDetails?: { text: string }
             }
 
             if (result.exceptionDetails) {
@@ -525,13 +461,16 @@ class UnifiedSessionManager {
      * - 传入 timeout（轮询上下文）：isExtensionConnected() 快速失败，不会主动等待重连；
      *   仅在"预检通过但竞态断连落入 sendCommand"时才发生预算内的连接等待
      * - 不传 timeout（一次性调用）：ensureExtensionConnected() 允许等待重连（最多 30s）
+     * @param selector CSS 选择器
+     * @param text 文本内容
+     * @param xpath XPath 表达式
      * @param timeout 端到端预算（毫秒），包含连接等待和请求超时，传给 bridge.find → sendCommand
      */
     async find(selector?: string, text?: string, xpath?: string, timeout?: number): Promise<Array<{
         refId: string
         tag: string
         text: string
-        rect: {x: number; y: number; width: number; height: number}
+        rect: { x: number; y: number; width: number; height: number }
     }>> {
         if (timeout !== undefined) {
             // 轮询上下文：快速失败，端到端预算受控
@@ -551,7 +490,11 @@ class UnifiedSessionManager {
     /**
      * 获取元素属性
      */
-    async getAttribute(selector: string | undefined, refId: string | undefined, attribute: string): Promise<string | null> {
+    async getAttribute(
+        selector: string | undefined,
+        refId: string | undefined,
+        attribute: string,
+    ): Promise<string | null> {
         if (await this.ensureExtensionConnected()) {
             return this.extensionBridge!.getAttribute(selector, refId, attribute)
         }
@@ -575,12 +518,23 @@ class UnifiedSessionManager {
         }
 
         // CDP 模式：支持按字段过滤
-        const urls = filter?.url ? [filter.url] : undefined
+        const urls    = filter?.url ? [filter.url] : undefined
         const cookies = await getCdpSession().getCookies(urls)
-        if (!filter) return cookies
+        if (!filter) {
+            return cookies
+        }
 
-        return cookies.filter((c: {name?: string; domain?: string; path?: string; secure?: boolean; session?: boolean; expires?: number}) => {
-            if (filter.name && c.name !== filter.name) return false
+        return cookies.filter((c: {
+            name?: string;
+            domain?: string;
+            path?: string;
+            secure?: boolean;
+            session?: boolean;
+            expires?: number
+        }) => {
+            if (filter.name && c.name !== filter.name) {
+                return false
+            }
             if (filter.domain) {
                 // 域名匹配：精确匹配或子域匹配（.example.com 匹配 sub.example.com）
                 const filterDomain = filter.domain.replace(/^\./, '')
@@ -589,12 +543,18 @@ class UnifiedSessionManager {
                     return false
                 }
             }
-            if (filter.path && c.path !== filter.path) return false
-            if (filter.secure !== undefined && c.secure !== filter.secure) return false
+            if (filter.path && c.path !== filter.path) {
+                return false
+            }
+            if (filter.secure !== undefined && c.secure !== filter.secure) {
+                return false
+            }
             if (filter.session !== undefined) {
                 // session cookie: expires 为 -1 或 0（CDP 返回 session cookie 的 expires 为 -1）
                 const isSession = (c.expires ?? -1) <= 0
-                if (filter.session !== isSession) return false
+                if (filter.session !== isSession) {
+                    return false
+                }
             }
             return true
         })
@@ -614,7 +574,7 @@ class UnifiedSessionManager {
     } = {}): Promise<void> {
         if (await this.ensureExtensionConnected()) {
             const state = this.extensionBridge!.getState()
-            const url = options.url || state?.url || 'http://localhost'
+            const url   = options.url || state?.url || 'http://localhost'
 
             // 转换 sameSite 值到 Chrome cookies API 格式
             let chromeSameSite: 'no_restriction' | 'lax' | 'strict' | 'unspecified' | undefined
@@ -624,20 +584,20 @@ class UnifiedSessionManager {
                     Lax: 'lax',
                     Strict: 'strict',
                 }
-                chromeSameSite = sameSiteMap[options.sameSite]
+                chromeSameSite                                                         = sameSiteMap[options.sameSite]
             }
 
             await this.extensionBridge!.setCookie({
-                url,
-                name,
-                value,
-                domain: options.domain,
-                path: options.path,
-                secure: options.secure,
-                httpOnly: options.httpOnly,
-                sameSite: chromeSameSite,
-                expirationDate: options.expirationDate,
-            })
+                                                      url,
+                                                      name,
+                                                      value,
+                                                      domain: options.domain,
+                                                      path: options.path,
+                                                      secure: options.secure,
+                                                      httpOnly: options.httpOnly,
+                                                      sameSite: chromeSameSite,
+                                                      expirationDate: options.expirationDate,
+                                                  })
             return
         }
 
@@ -659,7 +619,7 @@ class UnifiedSessionManager {
     /**
      * 清空 Cookies
      */
-    async clearCookies(filter?: {url?: string; domain?: string}): Promise<{count: number}> {
+    async clearCookies(filter?: { url?: string; domain?: string }): Promise<{ count: number }> {
         if (await this.ensureExtensionConnected()) {
             return await this.extensionBridge!.clearCookies(filter)
         }
@@ -667,11 +627,11 @@ class UnifiedSessionManager {
         // CDP 模式：有 filter 时先获取匹配的 cookies 再逐条删除，无 filter 时清除全部
         if (filter && (filter.url || filter.domain)) {
             // 优先使用 url 过滤缩小范围，减少不必要的遍历
-            const urls = filter.url ? [filter.url] : undefined
+            const urls    = filter.url ? [filter.url] : undefined
             const cookies = await getCdpSession().getCookies(urls) as Array<{
                 name: string; domain: string; path: string; secure: boolean
             }>
-            let count = 0
+            let count     = 0
             for (const cookie of cookies) {
                 // domain 进一步过滤（url 过滤后可能仍包含不匹配 domain 的 cookie）
                 if (filter.domain) {
@@ -682,8 +642,8 @@ class UnifiedSessionManager {
                     }
                 }
                 // 构造删除 URL：必须匹配 cookie 自身的 domain/path/secure
-                const protocol = cookie.secure ? 'https:' : 'http:'
-                const domain   = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain
+                const protocol  = cookie.secure ? 'https:' : 'http:'
+                const domain    = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain
                 const deleteUrl = `${protocol}//${domain}${cookie.path}`
                 await getCdpSession().deleteCookie(cookie.name, deleteUrl)
                 count++
@@ -773,25 +733,6 @@ class UnifiedSessionManager {
     }
 
     /**
-     * 串行化所有 tab 切换操作，防止并发请求互相覆盖 currentTabId。
-     * 调用者：selectPage/activatePage/newPage/closePage/navigate/reload/launch/withTabId。
-     *
-     * 注意：此锁不可重入。fn() 内禁止调用任何使用 withTabLock 的方法，否则会死锁。
-     * 当前所有 fn() 只调用 bridge 的原子操作（createTab/navigate/evaluate 等），不存在此问题。
-     */
-    private async withTabLock<T>(fn: () => Promise<T>): Promise<T> {
-        const previousLock = this.tabSwitchLock
-        let releaseLock: () => void
-        this.tabSwitchLock = new Promise<void>(resolve => { releaseLock = resolve })
-        try {
-            await previousLock
-            return await fn()
-        } finally {
-            releaseLock!()
-        }
-    }
-
-    /**
      * 临时切换操作目标 tab，执行完后恢复
      *
      * 用于多 tab 并行场景：指定 tabId 时临时切换到该 tab 执行操作，
@@ -802,7 +743,9 @@ class UnifiedSessionManager {
      */
     async withTabId<T>(tabId: string | undefined, fn: () => Promise<T>): Promise<T> {
         // Extension 未连接时不需要锁和 tab 切换（CDP 模式无 currentTabId 竞态）
-        if (!this.extensionBridge?.isConnected()) return fn()
+        if (!this.extensionBridge?.isConnected()) {
+            return fn()
+        }
 
         if (!tabId) {
             // 不切换 tab，但需要加锁保护 currentTabId 不被并发修改
@@ -815,7 +758,7 @@ class UnifiedSessionManager {
             this.extensionBridge!.setCurrentTabId(numericTabId)
             // tabId 明确指定时，禁止 CDP 回退（CDP 不感知 Extension tab）
             const previousRequireExtension = this.requireExtension
-            this.requireExtension = true
+            this.requireExtension          = true
             try {
                 return await fn()
             } finally {
@@ -835,14 +778,16 @@ class UnifiedSessionManager {
      * withTabId(tabId, () => withFrame(frame, () => { ... }))
      */
     async withFrame<T>(frame: string | number | undefined, fn: () => Promise<T>): Promise<T> {
-        if (frame === undefined) return fn()
+        if (frame === undefined) {
+            return fn()
+        }
 
         if (!this.extensionBridge?.isConnected()) {
             throw new Error('iframe 穿透需要 Extension 模式')
         }
 
-        const {frameId} = await this.extensionBridge!.resolveFrame(frame)
-        const previousFrameId = this.extensionBridge!.getCurrentFrameId()
+        const {frameId}                = await this.extensionBridge!.resolveFrame(frame)
+        const previousFrameId          = this.extensionBridge!.getCurrentFrameId()
         const previousRequireExtension = this.requireExtension
         this.extensionBridge!.setCurrentFrameId(frameId)
         this.requireExtension = true
@@ -879,29 +824,17 @@ class UnifiedSessionManager {
     }
 
     /**
-     * 解析 tab ID 字符串为数字，校验 NaN
-     */
-    private parseTabId(id: string): number {
-        const tabId = parseInt(id, 10)
-        if (isNaN(tabId)) {
-            throw new Error(`无效的 Tab ID: ${id}`)
-        }
-        return tabId
-    }
-
-    // ==================== 键鼠输入 ====================
-    // stealth 模式：使用 JS 事件模拟，不触发调试提示，推荐用于反检测场景
-    // precise 模式：使用 debugger API，精确但会显示"扩展程序正在调试此浏览器"
-
-    /**
      * 按下键盘按键
      */
     async keyDown(key: string): Promise<void> {
+        if (MODIFIER_KEYS[key]) {
+            this.modifiers |= MODIFIER_KEYS[key]
+        }
         if (await this.ensureExtensionConnected()) {
             if (this.inputMode === 'stealth') {
-                await this.extensionBridge!.stealthKey(key, 'down')
+                await this.extensionBridge!.stealthKey(key, 'down', this.getModifierNames())
             } else {
-                await this.extensionBridge!.inputKey('keyDown', {key, code: key})
+                await this.extensionBridge!.inputKey('keyDown', {key, code: key, modifiers: this.modifiers})
             }
             return
         }
@@ -914,11 +847,17 @@ class UnifiedSessionManager {
     async keyUp(key: string): Promise<void> {
         if (await this.ensureExtensionConnected()) {
             if (this.inputMode === 'stealth') {
-                await this.extensionBridge!.stealthKey(key, 'up')
+                await this.extensionBridge!.stealthKey(key, 'up', this.getModifierNames())
             } else {
-                await this.extensionBridge!.inputKey('keyUp', {key, code: key})
+                await this.extensionBridge!.inputKey('keyUp', {key, code: key, modifiers: this.modifiers})
+            }
+            if (MODIFIER_KEYS[key]) {
+                this.modifiers &= ~MODIFIER_KEYS[key]
             }
             return
+        }
+        if (MODIFIER_KEYS[key]) {
+            this.modifiers &= ~MODIFIER_KEYS[key]
         }
         await getCdpSession().keyUp(key)
     }
@@ -947,7 +886,7 @@ class UnifiedSessionManager {
             if (this.inputMode === 'stealth') {
                 await this.extensionBridge!.stealthMouse('mousemove', x, y)
             } else {
-                await this.extensionBridge!.inputMouse('mouseMoved', x, y)
+                await this.extensionBridge!.inputMouse('mouseMoved', x, y, {modifiers: this.modifiers})
             }
             return
         }
@@ -959,13 +898,22 @@ class UnifiedSessionManager {
      */
     async mouseDown(button: 'left' | 'middle' | 'right' | 'back' | 'forward' = 'left'): Promise<void> {
         const effectiveButton = (button === 'back' || button === 'forward') ? 'left' : button
-        const {x, y} = this.currentMousePosition  // 使用当前位置
+        const {x, y}          = this.currentMousePosition  // 使用当前位置
 
         if (await this.ensureExtensionConnected()) {
             if (this.inputMode === 'stealth') {
                 await this.extensionBridge!.stealthMouse('mousedown', x, y, effectiveButton)
             } else {
-                await this.extensionBridge!.inputMouse('mousePressed', x, y, {button: effectiveButton, clickCount: 1})
+                await this.extensionBridge!.inputMouse(
+                    'mousePressed',
+                    x,
+                    y,
+                    {
+                        button: effectiveButton,
+                        clickCount: 1,
+                        modifiers: this.modifiers,
+                    },
+                )
             }
             return
         }
@@ -977,18 +925,27 @@ class UnifiedSessionManager {
      */
     async mouseUp(button: 'left' | 'middle' | 'right' | 'back' | 'forward' = 'left'): Promise<void> {
         const effectiveButton = (button === 'back' || button === 'forward') ? 'left' : button
-        const {x, y} = this.currentMousePosition  // 使用当前位置
+        const {x, y}          = this.currentMousePosition  // 使用当前位置
 
         if (await this.ensureExtensionConnected()) {
             if (this.inputMode === 'stealth') {
                 await this.extensionBridge!.stealthMouse('mouseup', x, y, effectiveButton)
             } else {
-                await this.extensionBridge!.inputMouse('mouseReleased', x, y, {button: effectiveButton})
+                await this.extensionBridge!.inputMouse(
+                    'mouseReleased',
+                    x,
+                    y,
+                    {button: effectiveButton, modifiers: this.modifiers},
+                )
             }
             return
         }
         await getCdpSession().mouseUp(effectiveButton)
     }
+
+    // ==================== 键鼠输入 ====================
+    // stealth 模式：使用 JS 事件模拟，不触发调试提示，推荐用于反检测场景
+    // precise 模式：使用 debugger API，精确但会显示"扩展程序正在调试此浏览器"
 
     /**
      * 鼠标滚轮
@@ -996,28 +953,10 @@ class UnifiedSessionManager {
     async mouseWheel(deltaX: number, deltaY: number): Promise<void> {
         if (await this.ensureExtensionConnected()) {
             const {x, y} = this.currentMousePosition
-            await this.extensionBridge!.inputMouse('mouseWheel', x, y, {deltaX, deltaY})
+            await this.extensionBridge!.inputMouse('mouseWheel', x, y, {deltaX, deltaY, modifiers: this.modifiers})
             return
         }
         await getCdpSession().mouseWheel(deltaX, deltaY)
-    }
-
-    /**
-     * 点击（stealth 模式专用）
-     */
-    async clickAt(x: number, y: number, button = 'left'): Promise<void> {
-        if (await this.ensureExtensionConnected()) {
-            if (this.inputMode === 'stealth') {
-                await this.extensionBridge!.stealthClick(x, y, button)
-            } else {
-                await this.extensionBridge!.inputMouse('mousePressed', x, y, {button: button as 'left' | 'middle' | 'right', clickCount: 1})
-                await this.extensionBridge!.inputMouse('mouseReleased', x, y, {button: button as 'left' | 'middle' | 'right'})
-            }
-            return
-        }
-        await getCdpSession().mouseMove(x, y)
-        await getCdpSession().mouseDown(button as 'left' | 'middle' | 'right')
-        await getCdpSession().mouseUp(button as 'left' | 'middle' | 'right')
     }
 
     /**
@@ -1064,8 +1003,6 @@ class UnifiedSessionManager {
         await getCdpSession().touchEnd()
     }
 
-    // ==================== 控制台日志 ====================
-
     /**
      * 启用控制台日志捕获
      */
@@ -1100,18 +1037,6 @@ class UnifiedSessionManager {
     }
 
     /**
-     * 清除控制台日志
-     */
-    async clearConsoleLogs(): Promise<void> {
-        if (await this.ensureExtensionConnected()) {
-            await this.extensionBridge!.consoleClear()
-            return
-        }
-    }
-
-    // ==================== 网络日志 ====================
-
-    /**
      * 启用网络日志捕获
      */
     async enableNetwork(): Promise<void> {
@@ -1143,18 +1068,6 @@ class UnifiedSessionManager {
     }
 
     /**
-     * 清除网络日志
-     */
-    async clearNetworkLogs(): Promise<void> {
-        if (await this.ensureExtensionConnected()) {
-            await this.extensionBridge!.networkClear()
-            return
-        }
-    }
-
-    // ==================== Debugger 直接访问 ====================
-
-    /**
      * 发送 CDP 命令（高级用法）
      *
      * 自动识别 browser-level 域（Target、Browser、SystemInfo、DeviceAccess、IO）不携带 sessionId，
@@ -1165,7 +1078,7 @@ class UnifiedSessionManager {
             return this.extensionBridge!.debuggerSend(method, params)
         }
         // CDP 模式：browser-level 域不携带 sessionId
-        const domain = method.split('.')[0]
+        const domain              = method.split('.')[0]
         const browserLevelDomains = ['Target', 'Browser', 'SystemInfo', 'DeviceAccess', 'IO']
         if (browserLevelDomains.includes(domain)) {
             return getCdpSession().sendBrowserCommand(method, params)
@@ -1173,8 +1086,167 @@ class UnifiedSessionManager {
         return getCdpSession().send(method, params)
     }
 
-}
+    /** 获取当前修饰键名称数组（stealth 模式用） */
+    private getModifierNames(): string[] {
+        const names: string[] = []
+        if (this.modifiers & 1) {
+            names.push('alt')
+        }
+        if (this.modifiers & 2) {
+            names.push('ctrl')
+        }
+        if (this.modifiers & 4) {
+            names.push('meta')
+        }
+        if (this.modifiers & 8) {
+            names.push('shift')
+        }
+        return names
+    }
 
+    // ==================== 控制台日志 ====================
+
+    /**
+     * 检查 CDP 回退是否允许
+     *
+     * 当 requireExtension 为 true（tabId 或 frame 已指定）时，CDP 回退会操作错误目标，必须阻止。
+     * 允许时返回 false（供 ensureExtensionConnected 直接返回），不允许时抛出。
+     */
+    private assertCdpFallbackAllowed(): false {
+        if (this.requireExtension) {
+            throw new Error('Extension 已断开，当前操作需要 Extension（指定 tabId 或 frame）时不可回退 CDP（操作目标不一致）')
+        }
+        return false
+    }
+
+    /**
+     * 确保 Extension 已连接，如果断开则等待重连
+     * 返回 true 表示 Extension 可用，false 表示应 fallback 到 CDP
+     *
+     * 设计理念：Server 和 Extension 的启动时机完全独立，无任何要求。
+     * - 先装 Extension，一个月/一年后启动 Server → 能连上
+     * - 先启动 Server，再打开 Chrome → 能连上
+     * - 关闭再打开任何一方 → 能自动重连
+     *
+     * 超时设为 30 秒：足够等待 Extension 启动，但不会永远卡住。
+     *
+     * @param maxWait 调用方的端到端预算（毫秒）。传入时取 min(maxWait, 30000) 作为连接等待上限，
+     *               避免工具 timeout 被连接等待吞掉。不传则使用默认 30s。
+     */
+    private async ensureExtensionConnected(maxWait?: number): Promise<boolean> {
+        if (!this.extensionBridge) {
+            return this.assertCdpFallbackAllowed()
+        }
+        if (this.extensionBridge.isConnected()) {
+            return true
+        }
+        // CDP 已连接时跳过 Extension 等待，直接使用 CDP 回退
+        if (getCdpSession().isConnected()) {
+            return this.assertCdpFallbackAllowed()
+        }
+        // 冷却期内不重复等待，避免每次操作都阻塞 30 秒
+        if (Date.now() - this.lastConnectionFailure < UnifiedSessionManager.CONNECTION_COOLDOWN) {
+            return this.assertCdpFallbackAllowed()
+        }
+        // Extension 服务器已启动但断开连接，等待重连
+        const waitTimeout = maxWait !== undefined ? Math.min(maxWait, 30000) : 30000
+        if (waitTimeout <= 0) {
+            return this.assertCdpFallbackAllowed()
+        }
+        console.error(`[MCP] Waiting for Chrome Extension connection (${waitTimeout}ms timeout)...`)
+        console.error('[MCP] Please ensure Chrome is running with MCP Chrome extension installed.')
+        const connected = await this.extensionBridge.waitForConnection(waitTimeout)
+        if (connected) {
+            console.error('[MCP] Chrome Extension connected successfully')
+            this.lastConnectionFailure = 0
+            return true
+        }
+        console.error('[MCP] Chrome Extension connection timeout')
+        this.lastConnectionFailure = Date.now()
+        return this.assertCdpFallbackAllowed()
+    }
+
+    // ==================== 网络日志 ====================
+
+    /**
+     * 通过 callFunctionOn 执行函数调用
+     *
+     * 参数通过 CDP 协议结构化传递，避免大 payload 字符串拼接导致的长度限制和转义问题。
+     * 要求 code 必须是函数表达式（如 "(x) => x + 1"）。
+     */
+    private async callFunctionOn<T>(code: string, args: unknown[], timeout?: number): Promise<T> {
+        const globalResult = await this.extensionBridge!.debuggerSend('Runtime.evaluate', {
+            expression: 'globalThis',
+            returnByValue: false,
+        }, undefined, timeout) as { result: { objectId: string } }
+
+        try {
+            const params: Record<string, unknown> = {
+                functionDeclaration: code,
+                objectId: globalResult.result.objectId,
+                arguments: args.map(a => ({value: a})),
+                returnByValue: true,
+                awaitPromise: true,
+            }
+            if (timeout !== undefined) {
+                params.timeout = timeout
+            }
+            const result = await this.extensionBridge!.debuggerSend(
+                'Runtime.callFunctionOn',
+                params,
+                undefined,
+                timeout,
+            ) as {
+                result?: { value?: T }
+                exceptionDetails?: { text: string }
+            }
+            if (result.exceptionDetails) {
+                throw new Error(result.exceptionDetails.text)
+            }
+            return result.result?.value as T
+        } finally {
+            this.extensionBridge!.debuggerSend('Runtime.releaseObject', {
+                objectId: globalResult.result.objectId,
+            }).catch(() => {
+            })
+        }
+    }
+
+    /**
+     * 串行化所有 tab 切换操作，防止并发请求互相覆盖 currentTabId。
+     * 调用者：selectPage/activatePage/newPage/closePage/navigate/reload/launch/withTabId。
+     *
+     * 注意：此锁不可重入。fn() 内禁止调用任何使用 withTabLock 的方法，否则会死锁。
+     * 当前所有 fn() 只调用 bridge 的原子操作（createTab/navigate/evaluate 等），不存在此问题。
+     */
+    private async withTabLock<T>(fn: () => Promise<T>): Promise<T> {
+        const previousLock = this.tabSwitchLock
+        let releaseLock: () => void
+        this.tabSwitchLock = new Promise<void>(resolve => {
+            releaseLock = resolve
+        })
+        try {
+            await previousLock
+            return await fn()
+        } finally {
+            releaseLock!()
+        }
+    }
+
+    // ==================== Debugger 直接访问 ====================
+
+    /**
+     * 解析 tab ID 字符串为数字，校验 NaN
+     */
+    private parseTabId(id: string): number {
+        const tabId = parseInt(id, 10)
+        if (isNaN(tabId)) {
+            throw new Error(`无效的 Tab ID: ${id}`)
+        }
+        return tabId
+    }
+
+}
 
 /**
  * 获取统一会话管理器实例

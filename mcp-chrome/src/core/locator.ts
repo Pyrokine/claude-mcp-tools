@@ -18,6 +18,7 @@ import {ElementNotFoundError} from './errors.js'
 import {withRetry} from './retry.js'
 import {
     type Box,
+    DEFAULT_TIMEOUT,
     isAltTarget,
     isCoordinateTarget,
     isCSSTarget,
@@ -49,11 +50,11 @@ type RemoteObjectId = string;
 export interface LocatorOptions {
     /** 超时时间（毫秒），默认 30000 */
     timeout?: number;
+    /** 第 N 个匹配元素（从 0 开始，默认 0 即第一个） */
+    nth?: number;
     /** 获取当前 URL 的回调（用于错误上下文） */
     getUrl?: () => string | undefined;
 }
-
-const DEFAULT_TIMEOUT = 30000
 
 /**
  * 转义 XPath 字符串中的引号
@@ -115,9 +116,10 @@ function escapeCSSAttributeValue(str: string): string {
  */
 export class Locator {
     private logs: string[] = []
-    private timeout: number
-    private deadline: number
-    private getUrl?: () => string | undefined
+    private readonly timeout: number
+    private readonly deadline: number
+    private readonly nth: number
+    private readonly getUrl?: () => string | undefined
 
     constructor(
         private cdp: CDPClient,
@@ -127,6 +129,7 @@ export class Locator {
     ) {
         this.timeout  = options.timeout ?? DEFAULT_TIMEOUT
         this.deadline = Date.now() + this.timeout
+        this.nth      = options.nth ?? 0
         this.getUrl   = options.getUrl
     }
 
@@ -210,13 +213,6 @@ export class Locator {
     }
 
     /**
-     * 获取定位日志
-     */
-    getLogs(): string[] {
-        return this.logs
-    }
-
-    /**
      * 查找元素的内部实现（单次尝试）
      */
     private async findInternal(): Promise<NodeId> {
@@ -260,7 +256,7 @@ export class Locator {
      */
     private async findByAccessibility(): Promise<NodeId> {
         const {role, name} = this.target as { role: string; name?: string }
-        this.log(`使用可访问性树定位: role=${role}, name=${name ?? '(any)'}`)
+        this.log(`使用可访问性树定位: role=${role}, name=${name ?? '(any)'}${this.nth > 0 ? `, nth=${this.nth}` : ''}`)
 
         // 启用可访问性
         await this.send('Accessibility.enable')
@@ -275,7 +271,8 @@ export class Locator {
             }>;
         }
 
-        // 查找匹配的节点
+        // 查找匹配的节点，跳过前 nth 个
+        let matchCount = 0
         for (const node of nodes) {
             if (node.role?.value?.toLowerCase() !== role.toLowerCase()) {
                 continue
@@ -284,7 +281,13 @@ export class Locator {
                 continue
             }
             if (node.backendDOMNodeId) {
-                this.log(`找到元素: backendDOMNodeId=${node.backendDOMNodeId}`)
+                if (matchCount < this.nth) {
+                    ++matchCount
+                    continue
+                }
+                this.log(`找到元素: backendDOMNodeId=${node.backendDOMNodeId}${this.nth > 0 ?
+                                                                               `（第 ${this.nth} 个）` :
+                                                                               ''}`)
                 // 将 backendDOMNodeId 转换为 nodeId
                 const {nodeIds} = (await this.send('DOM.pushNodesByBackendIdsToFrontend', {
                     backendNodeIds: [node.backendDOMNodeId],
@@ -306,7 +309,7 @@ export class Locator {
             text: string;
             exact?: boolean;
         }
-        this.log(`使用文本内容定位: text=${text}, exact=${exact}`)
+        this.log(`使用文本内容定位: text=${text}, exact=${exact}${this.nth > 0 ? `, nth=${this.nth}` : ''}`)
 
         // 使用 XPath 查找包含文本的元素（正确转义引号）
         // 用 . 而非 text()：text() 只匹配直接子文本节点，. 匹配完整 textContent
@@ -326,7 +329,7 @@ export class Locator {
             label: string;
             exact?: boolean;
         }
-        this.log(`使用 label 定位: label=${label}, exact=${exact}`)
+        this.log(`使用 label 定位: label=${label}, exact=${exact}${this.nth > 0 ? `, nth=${this.nth}` : ''}`)
 
         // 转义 JS 字符串
         const escapedLabel = escapeJSString(label)
@@ -337,33 +340,44 @@ export class Locator {
         (function() {
           const targetLabel = "${escapedLabel}";
           const isExact = ${exact};
+          const nth = ${this.nth};
           const labels = document.querySelectorAll('label');
+          let matchCount = 0;
           for (const label of labels) {
             const text = label.textContent?.trim() ?? '';
             const match = isExact ? text === targetLabel : text.includes(targetLabel);
             if (match) {
+              let found = null;
               // 1. 通过 for 属性找关联元素
               if (label.htmlFor) {
                 const input = document.getElementById(label.htmlFor);
-                if (input) return input;
+                if (input) found = input;
               }
               // 2. 找 label 内部的 input
-              const inner = label.querySelector('input, select, textarea');
-              if (inner) return inner;
+              if (!found) {
+                const inner = label.querySelector('input, select, textarea');
+                if (inner) found = inner;
+              }
               // 3. 通过 label.id 推断（如 userName-label → #userName）
-              if (label.id && label.id.endsWith('-label')) {
+              if (!found && label.id && label.id.endsWith('-label')) {
                 const inputId = label.id.slice(0, -6);
                 const input = document.getElementById(inputId);
-                if (input) return input;
+                if (input) found = input;
               }
               // 4. 在父元素的相邻兄弟中查找 input
-              const parent = label.parentElement;
-              if (parent) {
-                for (const sibling of parent.parentElement?.children ?? []) {
-                  if (sibling === parent) continue;
-                  const input = sibling.querySelector('input, select, textarea');
-                  if (input) return input;
+              if (!found) {
+                const parent = label.parentElement;
+                if (parent) {
+                  for (const sibling of parent.parentElement?.children ?? []) {
+                    if (sibling === parent) continue;
+                    const input = sibling.querySelector('input, select, textarea');
+                    if (input) { found = input; break; }
+                  }
                 }
+              }
+              if (found) {
+                if (matchCount < nth) { ++matchCount; continue; }
+                return found;
               }
             }
           }
@@ -388,7 +402,9 @@ export class Locator {
             placeholder: string;
             exact?: boolean;
         }
-        this.log(`使用 placeholder 定位: placeholder=${placeholder}, exact=${exact}`)
+        this.log(`使用 placeholder 定位: placeholder=${placeholder}, exact=${exact}${this.nth > 0 ?
+                                                                                     `, nth=${this.nth}` :
+                                                                                     ''}`)
 
         const escaped = escapeCSSAttributeValue(placeholder)
         const css     = exact
@@ -406,7 +422,7 @@ export class Locator {
             title: string;
             exact?: boolean;
         }
-        this.log(`使用 title 属性定位: title=${title}, exact=${exact}`)
+        this.log(`使用 title 属性定位: title=${title}, exact=${exact}${this.nth > 0 ? `, nth=${this.nth}` : ''}`)
 
         const escaped = escapeCSSAttributeValue(title)
         const css     = exact ? `[title="${escaped}"]` : `[title*="${escaped}"]`
@@ -422,7 +438,7 @@ export class Locator {
             alt: string;
             exact?: boolean;
         }
-        this.log(`使用 alt 属性定位: alt=${alt}, exact=${exact}`)
+        this.log(`使用 alt 属性定位: alt=${alt}, exact=${exact}${this.nth > 0 ? `, nth=${this.nth}` : ''}`)
 
         const escaped = escapeCSSAttributeValue(alt)
         const css     = exact ? `[alt="${escaped}"]` : `[alt*="${escaped}"]`
@@ -435,7 +451,7 @@ export class Locator {
      */
     private async findByTestId(): Promise<NodeId> {
         const {testId} = this.target as { testId: string }
-        this.log(`使用 data-testid 定位: testId=${testId}`)
+        this.log(`使用 data-testid 定位: testId=${testId}${this.nth > 0 ? `, nth=${this.nth}` : ''}`)
 
         const escaped = escapeCSSAttributeValue(testId)
         return this.findByCSSInternal(`[data-testid="${escaped}"]`)
@@ -456,9 +472,11 @@ export class Locator {
      */
     private async findByCSSAndText(): Promise<NodeId> {
         const {css, text, exact = false} = this.target as { css: string; text: string; exact?: boolean }
-        this.log(`使用 CSS+text 组合定位: css=${css}, text=${text}, exact=${exact}`)
+        this.log(`使用 CSS+text 组合定位: css=${css}, text=${text}, exact=${exact}${this.nth > 0 ?
+                                                                                    `, nth=${this.nth}` :
+                                                                                    ''}`)
 
-        const escapedCSS = escapeJSString(css)
+        const escapedCSS  = escapeJSString(css)
         const escapedText = escapeJSString(text)
 
         const {result} = (await this.send('Runtime.evaluate', {
@@ -467,9 +485,12 @@ export class Locator {
           const elements = document.querySelectorAll("${escapedCSS}");
           const target = "${escapedText}";
           const isExact = ${exact};
+          const nth = ${this.nth};
+          let matchCount = 0;
           for (const el of elements) {
             const content = (el.textContent ?? '').trim();
             if (isExact ? content === target : content.includes(target)) {
+              if (matchCount < nth) { ++matchCount; continue; }
               return el;
             }
           }
@@ -505,6 +526,22 @@ export class Locator {
             root: { nodeId: number };
         }
 
+        if (this.nth > 0) {
+            // nth > 0：用 querySelectorAll 取第 nth 个
+            const {nodeIds} = (await this.send('DOM.querySelectorAll', {
+                nodeId: root.nodeId,
+                selector: css,
+            })) as { nodeIds: number[] }
+
+            if (this.nth >= nodeIds.length) {
+                this.log(`第 ${this.nth} 个匹配元素不存在（共 ${nodeIds.length} 个）: ${css}`)
+                throw new ElementNotFoundError(this.target, this.timeout, this.logs, this.getUrl?.())
+            }
+
+            this.log(`找到元素: nodeId=${nodeIds[this.nth]}（第 ${this.nth} 个）`)
+            return nodeIds[this.nth]
+        }
+
         const {nodeId} = (await this.send('DOM.querySelector', {
             nodeId: root.nodeId,
             selector: css,
@@ -523,9 +560,26 @@ export class Locator {
      * XPath 定位内部实现
      */
     private async findByXPathInternal(xpath: string): Promise<NodeId> {
+        const escapedXPath = escapeJSString(xpath)
+
+        if (this.nth > 0) {
+            // nth > 0：用 ORDERED_NODE_SNAPSHOT_TYPE 取第 nth 个
+            const {result} = (await this.send('Runtime.evaluate', {
+                expression: `(function() { var r = document.evaluate('${escapedXPath}', document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); return r.snapshotLength > ${this.nth} ? r.snapshotItem(${this.nth}) : null })()`,
+                returnByValue: false,
+            })) as { result: { objectId?: string; subtype?: string } }
+
+            if (!result.objectId || result.subtype === 'null') {
+                this.log(`第 ${this.nth} 个匹配元素不存在: ${xpath}`)
+                throw new ElementNotFoundError(this.target, this.timeout, this.logs, this.getUrl?.())
+            }
+
+            return this.objectIdToNodeId(result.objectId)
+        }
+
         // 使用 Runtime.evaluate 执行 XPath
         const {result} = (await this.send('Runtime.evaluate', {
-            expression: `document.evaluate('${escapeJSString(xpath)}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue`,
+            expression: `document.evaluate('${escapedXPath}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue`,
             returnByValue: false,
         })) as { result: { objectId?: string } }
 
@@ -565,7 +619,7 @@ export class Locator {
         }
 
         // content 是 [x1,y1, x2,y2, x3,y3, x4,y4] 格式的四个角坐标
-        const [x1, y1, x2, , , , x4, y4] = model.content
+        const [x1, y1, x2, , , , , y4] = model.content
 
         return {
             x: x1,

@@ -6,6 +6,7 @@
  */
 
 import {TimeoutError} from './errors.js'
+import {DEFAULT_TIMEOUT} from './types.js'
 
 /**
  * 重试选项
@@ -17,7 +18,6 @@ export interface RetryOptions {
     retryDelay?: number;
 }
 
-const DEFAULT_TIMEOUT     = 30000
 const DEFAULT_RETRY_DELAY = 100
 
 /**

@@ -7,13 +7,13 @@
  * 3. Tab/TabGroup 管理
  */
 
-import {HttpClient} from './http-client'
-import {ActionHandler} from './actions'
 import type {InternalMessage} from '../types'
+import {ActionHandler} from './actions'
+import {HttpClient} from './http-client'
 
 // ==================== 全局状态 ====================
 
-const httpClient = new HttpClient()
+const httpClient    = new HttpClient()
 const actionHandler = new ActionHandler()
 
 // MCP 管理的 Tab Group ID
@@ -85,16 +85,16 @@ function updateBadge(status: ConnectionStatus, count = 0) {
         badge = ''
     }
 
-    chrome.action.setBadgeBackgroundColor({color: colors[status]})
-    chrome.action.setBadgeText({text: badge})
+    void chrome.action.setBadgeBackgroundColor({color: colors[status]})
+    void chrome.action.setBadgeText({text: badge})
 }
 
 function broadcastStatus(status: ConnectionStatus, count: number) {
     chrome.runtime.sendMessage({
-        type: 'STATUS_UPDATE',
-        status,
-        count,
-    }).catch(() => {
+                                   type: 'STATUS_UPDATE',
+                                   status,
+                                   count,
+                               }).catch(() => {
         // Popup 可能未打开
     })
 }
@@ -106,13 +106,11 @@ export function setMcpTabGroupId(groupId: number | null) {
     mcpTabGroupId = groupId
 }
 
-export function getMcpTabGroupId(): number | null {
-    return mcpTabGroupId
-}
-
 // Tab 关闭时检查 TabGroup 是否为空
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-    if (mcpTabGroupId === null) return
+chrome.tabs.onRemoved.addListener(async (_tabId) => {
+    if (mcpTabGroupId === null) {
+        return
+    }
 
     try {
         const tabs = await chrome.tabs.query({groupId: mcpTabGroupId})
@@ -127,24 +125,15 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 // 感知用户拖动 tab 到 MCP Chrome 分组
 // Chrome 88+ 的 onUpdated 事件会在 tab 的 groupId 变化时触发
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (mcpTabGroupId === null) return
+    if (mcpTabGroupId === null) {
+        return
+    }
     // changeInfo 包含 groupId（Chrome 88+），TypeScript 类型可能未声明
-    const info = changeInfo as chrome.tabs.TabChangeInfo & {groupId?: number}
+    const info = changeInfo as chrome.tabs.TabChangeInfo & { groupId?: number }
     if (info.groupId === mcpTabGroupId) {
         console.log(`[MCP] Tab ${tabId} joined MCP Chrome group`)
     }
 })
-
-// 获取 MCP Chrome 分组中的所有 tab
-export async function getMcpGroupTabs(): Promise<number[]> {
-    if (mcpTabGroupId === null) return []
-    try {
-        const tabs = await chrome.tabs.query({groupId: mcpTabGroupId})
-        return tabs.map(t => t.id!).filter(Boolean)
-    } catch {
-        return []
-    }
-}
 
 // ==================== Keep-Alive 机制 ====================
 
@@ -154,12 +143,12 @@ const KEEPALIVE_ALARM = 'mcp-keepalive'
 
 // chrome.alarms 最小周期为 1 分钟（Chrome 强制限制）
 // WebSocket 心跳（15s ping）已能保持 Service Worker 存活，alarm 仅作断线重连备份
-chrome.alarms.create(KEEPALIVE_ALARM, {periodInMinutes: 1})
+void chrome.alarms.create(KEEPALIVE_ALARM, {periodInMinutes: 1})
 
 chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === KEEPALIVE_ALARM) {
         // 定期全量扫描：发现新 Server 或重连断开的
-        httpClient.connect()
+        void httpClient.connect()
     }
 })
 
@@ -167,5 +156,5 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // Service Worker 启动时立即尝试连接所有 MCP Server
 setTimeout(() => {
-    httpClient.connect()
+    void httpClient.connect()
 }, 500)

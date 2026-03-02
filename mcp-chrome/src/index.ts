@@ -12,110 +12,38 @@
  * - 事件序列模型（支持任意键鼠组合）
  */
 
-import {Server} from '@modelcontextprotocol/sdk/server/index.js'
+import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js'
 import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js'
-import {CallToolRequestSchema, ListToolsRequestSchema} from '@modelcontextprotocol/sdk/types.js'
 
-import {getSession, getUnifiedSession} from './core/index.js'
+import {getUnifiedSession} from './core/index.js'
 import {
-    browseToolDefinition,
-    cookiesToolDefinition,
-    evaluateToolDefinition,
-    extractToolDefinition,
-    handleBrowse,
-    handleCookies,
-    handleEvaluate,
-    handleExtract,
-    handleInput,
-    handleLogs,
-    handleManage,
-    handleWait,
-    inputToolDefinition,
-    logsToolDefinition,
-    manageToolDefinition,
-    waitToolDefinition,
+    registerBrowseTool,
+    registerCookiesTool,
+    registerEvaluateTool,
+    registerExtractTool,
+    registerInputTool,
+    registerLogsTool,
+    registerManageTool,
+    registerWaitTool,
 } from './tools/index.js'
-
-/**
- * 所有工具定义
- */
-const tools = [
-    browseToolDefinition,
-    inputToolDefinition,
-    extractToolDefinition,
-    waitToolDefinition,
-    cookiesToolDefinition,
-    logsToolDefinition,
-    evaluateToolDefinition,
-    manageToolDefinition,
-]
-
-/**
- * 工具处理器映射
- */
-const handlers: Record<
-    string,
-    (params: unknown) => Promise<{
-        content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-        isError?: boolean;
-    }>
-> = {
-    browse: handleBrowse,
-    input: handleInput,
-    extract: handleExtract,
-    wait: handleWait,
-    cookies: handleCookies,
-    logs: handleLogs,
-    evaluate: handleEvaluate,
-    manage: handleManage,
-}
 
 /**
  * 创建 MCP Server
  */
-function createServer(): Server {
-    const server = new Server(
-        {
-            name: 'mcp-chrome',
-            version: '1.1.0',
-        },
-        {
-            capabilities: {
-                tools: {},
-            },
-        },
+function createServer(): McpServer {
+    const server = new McpServer(
+        {name: 'mcp-chrome', version: '1.2.0'},
+        {capabilities: {tools: {}}},
     )
 
-    // 列出工具
-    server.setRequestHandler(ListToolsRequestSchema, async () => {
-        return {tools}
-    })
-
-    // 调用工具
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
-        const {name, arguments: args} = request.params
-
-        const handler = handlers[name]
-        if (!handler) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                                                 error: {
-                                                     code: 'UNKNOWN_TOOL',
-                                                     message: `未知工具: ${name}`,
-                                                     suggestion: `可用工具: ${Object.keys(handlers).join(', ')}`,
-                                                 },
-                                             }),
-                    },
-                ],
-                isError: true,
-            }
-        }
-
-        return handler(args)
-    })
+    registerBrowseTool(server)
+    registerInputTool(server)
+    registerExtractTool(server)
+    registerWaitTool(server)
+    registerCookiesTool(server)
+    registerLogsTool(server)
+    registerEvaluateTool(server)
+    registerManageTool(server)
 
     return server
 }

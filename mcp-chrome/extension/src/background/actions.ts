@@ -5,41 +5,41 @@
  */
 
 import type {
-    TabInfo,
-    TabsListParams,
-    TabsCreateParams,
-    TabsCloseParams,
-    TabsActivateParams,
-    NavigateParams,
-    GoBackParams,
-    GoForwardParams,
-    ReloadParams,
-    ReadPageParams,
-    ReadPageResult,
-    ScreenshotParams,
-    ScreenshotResult,
     ClickParams,
-    TypeParams,
-    ScrollParams,
-    EvaluateParams,
-    FindParams,
-    ElementInfo,
+    ConsoleMessage,
+    CookiesClearParams,
+    CookiesDeleteParams,
     CookiesGetParams,
     CookiesSetParams,
-    CookiesDeleteParams,
-    CookiesClearParams,
-    TabGroupCreateParams,
-    TabGroupAddParams,
-    WaitUntil,
     DebuggerAttachParams,
     DebuggerDetachParams,
     DebuggerSendParams,
+    ElementInfo,
+    EvaluateParams,
+    FindParams,
+    GoBackParams,
+    GoForwardParams,
     KeyEventParams,
     MouseEventParams,
-    TouchEventParams,
-    ConsoleMessage,
+    NavigateParams,
     NetworkRequest,
+    ReadPageParams,
+    ReadPageResult,
+    ReloadParams,
     ResolveFrameParams,
+    ScreenshotParams,
+    ScreenshotResult,
+    ScrollParams,
+    TabGroupAddParams,
+    TabGroupCreateParams,
+    TabInfo,
+    TabsActivateParams,
+    TabsCloseParams,
+    TabsCreateParams,
+    TabsListParams,
+    TouchEventParams,
+    TypeParams,
+    WaitUntil,
 } from '../types'
 import {setMcpTabGroupId} from './index'
 
@@ -50,14 +50,20 @@ interface ActionContext {
 type ActionFunction = (params: unknown, context: ActionContext) => Promise<unknown>
 
 export class ActionHandler {
-    private actions: Map<string, ActionFunction> = new Map()
-    private attachedTabs: Set<number> = new Set()
-    private consoleMessages: Map<number, ConsoleMessage[]> = new Map()
-    private networkRequests: Map<number, NetworkRequest[]> = new Map()
+    private actions: Map<string, ActionFunction>                                                       = new Map()
+    private attachedTabs: Set<number>                                                                  = new Set()
+    private consoleMessages: Map<number, ConsoleMessage[]>                                             = new Map()
+    private networkRequests: Map<number, NetworkRequest[]>                                             = new Map()
     /** 按 tabId 隔离的待匹配请求（不同 tab 的 requestId 可能重复） */
-    private pendingRequests: Map<number, Map<string, { url: string; method: string; type: string; timestamp: number }>> = new Map()
+    private pendingRequests: Map<number, Map<string, {
+        url: string;
+        method: string;
+        type: string;
+        timestamp: number
+    }>>                                                                                                = new Map()
     /** 按 tabId 缓存的执行上下文（由 Runtime.executionContextCreated 事件填充） */
-    private executionContexts: Map<number, Array<{id: number; frameId: string; isDefault: boolean}>> = new Map()
+    private executionContexts: Map<number, Array<{ id: number; frameId: string; isDefault: boolean }>> = new Map()
+    private pendingAttach                                                                              = new Map<number, Promise<void>>()
 
     constructor() {
         this.registerActions()
@@ -71,6 +77,8 @@ export class ActionHandler {
         }
         return handler(params, context)
     }
+
+    // ==================== Debugger 监听器 ====================
 
     private registerActions() {
         // Tab 操作
@@ -147,7 +155,7 @@ export class ActionHandler {
         this.actions.set('evaluate_in_frame', this.evaluateInFrame.bind(this))
     }
 
-    // ==================== Debugger 监听器 ====================
+    // ==================== Tab 操作 ====================
 
     private setupDebuggerListeners() {
         // 监听 debugger 断开
@@ -164,15 +172,17 @@ export class ActionHandler {
 
         // 监听 debugger 事件
         chrome.debugger.onEvent.addListener((source, method, params) => {
-            if (!source.tabId) return
+            if (!source.tabId) {
+                return
+            }
 
             // 捕获控制台消息
             if (method === 'Runtime.consoleAPICalled') {
                 const p = params as {
                     type: string
-                    args: Array<{type: string; value?: unknown; description?: string}>
+                    args: Array<{ type: string; value?: unknown; description?: string }>
                     timestamp: number
-                    stackTrace?: {callFrames: Array<{url: string; lineNumber: number}>}
+                    stackTrace?: { callFrames: Array<{ url: string; lineNumber: number }> }
                 }
 
                 const message: ConsoleMessage = {
@@ -183,7 +193,7 @@ export class ActionHandler {
                 }
 
                 if (p.stackTrace?.callFrames?.[0]) {
-                    message.url = p.stackTrace.callFrames[0].url
+                    message.url        = p.stackTrace.callFrames[0].url
                     message.lineNumber = p.stackTrace.callFrames[0].lineNumber
                 }
 
@@ -202,7 +212,7 @@ export class ActionHandler {
                     timestamp: number
                     exceptionDetails: {
                         text: string
-                        exception?: {description?: string}
+                        exception?: { description?: string }
                         url?: string
                         lineNumber?: number
                     }
@@ -227,7 +237,7 @@ export class ActionHandler {
 
             // 捕获网络请求发起
             if (method === 'Network.requestWillBeSent') {
-                const p = params as {
+                const p        = params as {
                     requestId: string
                     request: { url: string; method: string }
                     type: string
@@ -248,20 +258,20 @@ export class ActionHandler {
 
             // 捕获网络响应
             if (method === 'Network.responseReceived') {
-                const p = params as {
+                const p          = params as {
                     requestId: string
                     response: { status: number }
                     timestamp: number
                 }
                 const tabPending = this.pendingRequests.get(source.tabId)
-                const pending = tabPending?.get(p.requestId)
+                const pending    = tabPending?.get(p.requestId)
                 if (pending) {
                     const requests = this.networkRequests.get(source.tabId) || []
                     requests.push({
-                        ...pending,
-                        status: p.response.status,
-                        duration: (p.timestamp - pending.timestamp) * 1000,
-                    })
+                                      ...pending,
+                                      status: p.response.status,
+                                      duration: (p.timestamp - pending.timestamp) * 1000,
+                                  })
                     if (requests.length > 1000) {
                         requests.shift()
                     }
@@ -278,7 +288,7 @@ export class ActionHandler {
 
             // 捕获执行上下文创建（用于 iframe 内 precise evaluate）
             if (method === 'Runtime.executionContextCreated') {
-                const p = params as {context: {id: number; auxData?: {frameId?: string; isDefault?: boolean}}}
+                const p   = params as { context: { id: number; auxData?: { frameId?: string; isDefault?: boolean } } }
                 const ctx = p.context
                 if (ctx.auxData?.frameId) {
                     const contexts = this.executionContexts.get(source.tabId) || []
@@ -289,7 +299,7 @@ export class ActionHandler {
 
             // 子 frame 导航会销毁旧上下文：及时移除，避免命中已失效的 contextId
             if (method === 'Runtime.executionContextDestroyed') {
-                const p = params as {executionContextId: number}
+                const p        = params as { executionContextId: number }
                 const contexts = this.executionContexts.get(source.tabId)
                 if (contexts) {
                     const next = contexts.filter(c => c.id !== p.executionContextId)
@@ -308,14 +318,16 @@ export class ActionHandler {
         })
     }
 
-    // ==================== Tab 操作 ====================
-
     private async tabsList(params: unknown, context: ActionContext): Promise<TabInfo[]> {
-        const p = params as TabsListParams | undefined
+        const p                                = params as TabsListParams | undefined
         const queryInfo: chrome.tabs.QueryInfo = {}
 
-        if (p?.windowId) queryInfo.windowId = p.windowId
-        if (p?.active !== undefined) queryInfo.active = p.active
+        if (p?.windowId) {
+            queryInfo.windowId = p.windowId
+        }
+        if (p?.active !== undefined) {
+            queryInfo.active = p.active
+        }
 
         const tabs = await chrome.tabs.query(queryInfo)
 
@@ -389,17 +401,23 @@ export class ActionHandler {
         }
     }
 
-    private async tabsClose(params: unknown): Promise<{success: boolean}> {
+    private async tabsClose(params: unknown): Promise<{ success: boolean }> {
         const p = params as TabsCloseParams
-        if (!p?.tabId) throw new Error('tabId is required')
+        if (!p?.tabId) {
+            throw new Error('tabId is required')
+        }
 
         await chrome.tabs.remove(p.tabId)
         return {success: true}
     }
 
+    // ==================== 导航操作 ====================
+
     private async tabsActivate(params: unknown, context: ActionContext): Promise<TabInfo> {
         const p = params as TabsActivateParams
-        if (!p?.tabId) throw new Error('tabId is required')
+        if (!p?.tabId) {
+            throw new Error('tabId is required')
+        }
 
         const tab = await chrome.tabs.update(p.tabId, {active: true})
 
@@ -420,11 +438,11 @@ export class ActionHandler {
         }
     }
 
-    // ==================== 导航操作 ====================
-
     private async navigate(params: unknown, context: ActionContext): Promise<TabInfo> {
         const p = params as NavigateParams
-        if (!p?.url) throw new Error('url is required')
+        if (!p?.url) {
+            throw new Error('url is required')
+        }
 
         const tabId = await this.getTargetTabId(p.tabId)
         await chrome.tabs.update(tabId, {url: p.url})
@@ -446,14 +464,14 @@ export class ActionHandler {
         }
     }
 
-    private async goBack(params: unknown): Promise<{url: string; title: string; navigated: boolean}> {
-        const p = params as GoBackParams | undefined
-        const tabId = await this.getTargetTabId(p?.tabId)
+    private async goBack(params: unknown): Promise<{ url: string; title: string; navigated: boolean }> {
+        const p         = params as GoBackParams | undefined
+        const tabId     = await this.getTargetTabId(p?.tabId)
         const beforeTab = await chrome.tabs.get(tabId)
         const beforeUrl = beforeTab.url
 
         // 信号窗口：受 p.timeout 控制（上限 5s），默认 2s
-        const signalTimeout = Math.min(p?.timeout ?? 2000, 5000)
+        const signalTimeout     = Math.min(p?.timeout ?? 2000, 5000)
         // 先注册事件监听，再触发导航，避免错过瞬间完成的导航
         const navigationPromise = this.waitForNavigationSignal(tabId, beforeUrl, signalTimeout)
         await chrome.tabs.goBack(tabId)
@@ -467,14 +485,14 @@ export class ActionHandler {
         return {url: tab.url || '', title: tab.title || '', navigated}
     }
 
-    private async goForward(params: unknown): Promise<{url: string; title: string; navigated: boolean}> {
-        const p = params as GoForwardParams | undefined
-        const tabId = await this.getTargetTabId(p?.tabId)
+    private async goForward(params: unknown): Promise<{ url: string; title: string; navigated: boolean }> {
+        const p         = params as GoForwardParams | undefined
+        const tabId     = await this.getTargetTabId(p?.tabId)
         const beforeTab = await chrome.tabs.get(tabId)
         const beforeUrl = beforeTab.url
 
         // 信号窗口：受 p.timeout 控制（上限 5s），默认 2s
-        const signalTimeout = Math.min(p?.timeout ?? 2000, 5000)
+        const signalTimeout     = Math.min(p?.timeout ?? 2000, 5000)
         // 先注册事件监听，再触发导航，避免错过瞬间完成的导航
         const navigationPromise = this.waitForNavigationSignal(tabId, beforeUrl, signalTimeout)
         await chrome.tabs.goForward(tabId)
@@ -503,7 +521,9 @@ export class ActionHandler {
             let settled = false
 
             const done = (result: boolean) => {
-                if (settled) return
+                if (settled) {
+                    return
+                }
                 settled = true
                 clearTimeout(timer)
                 chrome.tabs.onUpdated.removeListener(tabListener)
@@ -522,7 +542,9 @@ export class ActionHandler {
             }
 
             const tabListener = (updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
-                if (updatedTabId !== tabId) return
+                if (updatedTabId !== tabId) {
+                    return
+                }
                 if (changeInfo.url && changeInfo.url !== beforeUrl) {
                     done(true)
                     return
@@ -546,8 +568,10 @@ export class ActionHandler {
         })
     }
 
-    private async reload(params: unknown): Promise<{url: string; title: string}> {
-        const p = params as ReloadParams | undefined
+    // ==================== 页面内容 ====================
+
+    private async reload(params: unknown): Promise<{ url: string; title: string }> {
+        const p     = params as ReloadParams | undefined
         const tabId = await this.getTargetTabId(p?.tabId)
 
         await chrome.tabs.reload(tabId, {bypassCache: p?.ignoreCache ?? false})
@@ -560,17 +584,26 @@ export class ActionHandler {
         return {url: tab.url || '', title: tab.title || ''}
     }
 
-    // ==================== 页面内容 ====================
-
     private async readPage(params: unknown): Promise<ReadPageResult> {
-        const p = params as ReadPageParams | undefined
+        const p     = params as ReadPageParams | undefined
         const tabId = await this.getTargetTabId(p?.tabId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: generateAccessibilityTree,
-            args: [p?.filter || 'all', p?.depth ?? 15, p?.maxLength ?? null, p?.refId ?? null],
-        })
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: generateAccessibilityTree,
+                                                                 args: [
+                                                                     p?.filter || 'all',
+                                                                     p?.depth ?? 15,
+                                                                     p?.maxLength ?? null,
+                                                                     p?.refId ?? null,
+                                                                 ],
+                                                             })
 
         if (!results || results.length === 0) {
             throw new Error('Failed to read page')
@@ -579,8 +612,10 @@ export class ActionHandler {
         return results[0].result as ReadPageResult
     }
 
+    // ==================== DOM 操作 ====================
+
     private async screenshot(params: unknown): Promise<ScreenshotResult> {
-        const p = params as ScreenshotParams | undefined
+        const p     = params as ScreenshotParams | undefined
         const tabId = await this.getTargetTabId(p?.tabId)
 
         // 使用 debugger API 截图（不需要 tab 在前台）
@@ -591,19 +626,19 @@ export class ActionHandler {
             const {result: sizeResult} = await chrome.debugger.sendCommand({tabId}, 'Runtime.evaluate', {
                 expression: 'JSON.stringify({width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight})',
                 returnByValue: true,
-            }) as {result: {value: string}}
-            const {width, height} = JSON.parse(sizeResult.value)
+            }) as { result: { value: string } }
+            const {width, height}      = JSON.parse(sizeResult.value)
 
             // 临时设置视口为页面完整尺寸
             await chrome.debugger.sendCommand({tabId}, 'Emulation.setDeviceMetricsOverride', {
-                width, height, deviceScaleFactor: 1, mobile: false,
+                width, height, deviceScaleFactor: p?.scale ?? 1, mobile: false,
             })
 
             try {
                 const result = await chrome.debugger.sendCommand({tabId}, 'Page.captureScreenshot', {
                     format: p?.format || 'png',
                     quality: p?.quality,
-                }) as {data: string}
+                }) as { data: string }
                 return {data: result.data, format: p?.format || 'png'}
             } finally {
                 await chrome.debugger.sendCommand({tabId}, 'Emulation.clearDeviceMetricsOverride')
@@ -613,7 +648,7 @@ export class ActionHandler {
         const result = await chrome.debugger.sendCommand({tabId}, 'Page.captureScreenshot', {
             format: p?.format || 'png',
             quality: p?.quality,
-        }) as {data: string}
+        }) as { data: string }
 
         return {
             data: result.data,
@@ -621,77 +656,111 @@ export class ActionHandler {
         }
     }
 
-    // ==================== DOM 操作 ====================
-
-    private async click(params: unknown): Promise<{success: boolean}> {
+    private async click(params: unknown): Promise<{ success: boolean }> {
         const p = params as ClickParams
-        if (!p?.refId) throw new Error('refId is required')
+        if (!p?.refId) {
+            throw new Error('refId is required')
+        }
 
         const tabId = await this.getTargetTabId(p.tabId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: performClick,
-            args: [p.refId],
-        })
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: performClick,
+                                                                 args: [p.refId],
+                                                             })
 
-        return results[0].result as {success: boolean}
+        return results[0].result as { success: boolean }
     }
 
-    private async type(params: unknown): Promise<{success: boolean}> {
+    private async type(params: unknown): Promise<{ success: boolean }> {
         const p = params as TypeParams
-        if (!p?.refId) throw new Error('refId is required')
-        if (p.text === undefined) throw new Error('text is required')
+        if (!p?.refId) {
+            throw new Error('refId is required')
+        }
+        if (p.text === undefined) {
+            throw new Error('text is required')
+        }
 
         const tabId = await this.getTargetTabId(p.tabId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: performType,
-            args: [p.refId, p.text, p.clear ?? false],
-        })
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: performType,
+                                                                 args: [p.refId, p.text, p.clear ?? false],
+                                                             })
 
-        return results[0].result as {success: boolean}
+        return results[0].result as { success: boolean }
     }
 
-    private async scroll(params: unknown): Promise<{success: boolean; scrollX: number; scrollY: number}> {
-        const p = params as ScrollParams | undefined
+    private async scroll(params: unknown): Promise<{ success: boolean; scrollX: number; scrollY: number }> {
+        const p     = params as ScrollParams | undefined
         const tabId = await this.getTargetTabId(p?.tabId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: performScroll,
-            args: [p?.x || 0, p?.y || 0, p?.refId ?? null],
-        })
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: performScroll,
+                                                                 args: [p?.x || 0, p?.y || 0, p?.refId ?? null],
+                                                             })
 
-        return results[0].result as {success: boolean; scrollX: number; scrollY: number}
+        return results[0].result as { success: boolean; scrollX: number; scrollY: number }
     }
 
-    private async evaluate(params: unknown): Promise<{success: boolean; result?: string; error?: string}> {
+    private async evaluate(params: unknown): Promise<{ success: boolean; result?: string; error?: string }> {
         const p = params as EvaluateParams
-        if (!p?.code) throw new Error('code is required')
+        if (!p?.code) {
+            throw new Error('code is required')
+        }
 
         const tabId = await this.getTargetTabId(p.tabId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: executeCode,
-            args: [p.code],
-        })
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: executeCode,
+                                                                 args: [p.code],
+                                                             })
 
-        return results[0].result as {success: boolean; result?: string; error?: string}
+        return results[0].result as { success: boolean; result?: string; error?: string }
     }
 
     private async find(params: unknown): Promise<ElementInfo[]> {
-        const p = params as FindParams | undefined
-        const tabId = await this.getTargetTabId(p?.tabId)
-        const frameId = (p as {frameId?: number})?.frameId ?? 0
+        const p       = params as FindParams | undefined
+        const tabId   = await this.getTargetTabId(p?.tabId)
+        const frameId = (p as { frameId?: number })?.frameId ?? 0
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [frameId]},
-            func: findElements,
-            args: [p?.selector ?? null, p?.text ?? null, p?.xpath ?? null],
-        })
+                                                                 target: {tabId, frameIds: [frameId]},
+                                                                 func: findElements,
+                                                                 args: [
+                                                                     p?.selector ?? null,
+                                                                     p?.text ?? null,
+                                                                     p?.xpath ?? null,
+                                                                 ],
+                                                             })
 
         let elements = results[0].result as ElementInfo[]
 
@@ -714,6 +783,8 @@ export class ActionHandler {
         return elements
     }
 
+    // ==================== 页面内容提取 ====================
+
     /**
      * 获取 iframe 在主页面中的偏移量
      *
@@ -721,153 +792,220 @@ export class ActionHandler {
      * 当多个 iframe 共享同一 URL 时，优先按同 URL 的出现顺序匹配，避免取到第一个错误 iframe。
      * clientLeft/clientTop 补偿 iframe 的 border，确保坐标指向内容区域起点。
      */
-    private async getFrameOffset(tabId: number, frameId: number): Promise<{x: number; y: number} | null> {
+    private async getFrameOffset(tabId: number, frameId: number): Promise<{ x: number; y: number } | null> {
         const allFrames = await chrome.webNavigation.getAllFrames({tabId})
-        if (!allFrames) return null
+        if (!allFrames) {
+            return null
+        }
 
         const childFrames = allFrames.filter(f => f.parentFrameId === 0 && f.frameId !== 0)
-        const frameIndex = childFrames.findIndex(f => f.frameId === frameId)
-        if (frameIndex < 0) return null
+        const frameIndex  = childFrames.findIndex(f => f.frameId === frameId)
+        if (frameIndex < 0) {
+            return null
+        }
 
-        const targetFrame = childFrames[frameIndex]
+        const targetFrame   = childFrames[frameIndex]
         const sameUrlFrames = childFrames.filter(f => f.url === targetFrame.url)
-        const sameUrlIndex = sameUrlFrames.findIndex(f => f.frameId === frameId)
+        const sameUrlIndex  = sameUrlFrames.findIndex(f => f.frameId === frameId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [0]},
-            func: (frameUrl: string, frameIndex: number, sameUrlIndex: number) => {
-                const iframes = Array.from(document.querySelectorAll('iframe, frame')) as HTMLIFrameElement[]
+                                                                 target: {tabId, frameIds: [0]},
+                                                                 func: (
+                                                                     frameUrl: string,
+                                                                     frameIndex: number,
+                                                                     sameUrlIndex: number,
+                                                                 ) => {
+                                                                     const iframes = Array.from(document.querySelectorAll(
+                                                                         'iframe, frame')) as HTMLIFrameElement[]
 
-                const urlMatches = frameUrl ? iframes.filter(iframe => iframe.src === frameUrl) : []
-                let target: HTMLIFrameElement | undefined
+                                                                     const urlMatches = frameUrl ?
+                                                                                        iframes.filter(iframe => iframe.src ===
+                                                                                                                 frameUrl) :
+                                                                         []
+                                                                     let target: HTMLIFrameElement | undefined
 
-                if (urlMatches.length === 1) {
-                    target = urlMatches[0]
-                } else if (sameUrlIndex >= 0 && sameUrlIndex < urlMatches.length) {
-                    target = urlMatches[sameUrlIndex]
-                } else if (frameIndex >= 0 && frameIndex < iframes.length) {
-                    target = iframes[frameIndex]
-                } else if (urlMatches.length > 0) {
-                    target = urlMatches[0]
-                }
+                                                                     if (urlMatches.length === 1) {
+                                                                         target = urlMatches[0]
+                                                                     } else if (sameUrlIndex >=
+                                                                                0 &&
+                                                                                sameUrlIndex <
+                                                                                urlMatches.length) {
+                                                                         target = urlMatches[sameUrlIndex]
+                                                                     } else if (frameIndex >=
+                                                                                0 &&
+                                                                                frameIndex <
+                                                                                iframes.length) {
+                                                                         target = iframes[frameIndex]
+                                                                     } else if (urlMatches.length > 0) {
+                                                                         target = urlMatches[0]
+                                                                     }
 
-                if (!target) return null
-                const rect = target.getBoundingClientRect()
-                return {x: rect.x + target.clientLeft, y: rect.y + target.clientTop}
-            },
-            args: [targetFrame.url, frameIndex, sameUrlIndex],
-        })
+                                                                     if (!target) {
+                                                                         return null
+                                                                     }
+                                                                     const rect = target.getBoundingClientRect()
+                                                                     return {
+                                                                         x: rect.x + target.clientLeft,
+                                                                         y: rect.y + target.clientTop,
+                                                                     }
+                                                                 },
+                                                                 args: [targetFrame.url, frameIndex, sameUrlIndex],
+                                                             })
 
-        return results[0]?.result as {x: number; y: number} | null
+        return results[0]?.result as { x: number; y: number } | null
     }
 
-    // ==================== 页面内容提取 ====================
-
-    private async getText(params: unknown): Promise<{text: string}> {
-        const p = params as {tabId?: number; selector?: string}
+    private async getText(params: unknown): Promise<{ text: string }> {
+        const p     = params as { tabId?: number; selector?: string }
         const tabId = await this.getTargetTabId(p?.tabId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: extractText,
-            args: [p?.selector ?? null],
-        })
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: extractText,
+                                                                 args: [p?.selector ?? null],
+                                                             })
 
-        return results[0].result as {text: string}
+        return results[0].result as { text: string }
     }
 
-    private async getHtml(params: unknown): Promise<{html: string}> {
-        const p = params as {tabId?: number; selector?: string; outer?: boolean}
+    private async getHtml(params: unknown): Promise<{ html: string }> {
+        const p     = params as { tabId?: number; selector?: string; outer?: boolean }
         const tabId = await this.getTargetTabId(p?.tabId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: extractHtml,
-            args: [p?.selector ?? null, p?.outer ?? true],
-        })
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: extractHtml,
+                                                                 args: [p?.selector ?? null, p?.outer ?? true],
+                                                             })
 
-        return results[0].result as {html: string}
-    }
-
-    private async getAttribute(params: unknown): Promise<{value: string | null}> {
-        const p = params as {tabId?: number; selector?: string; refId?: string; attribute: string}
-        if (!p?.attribute) throw new Error('attribute is required')
-
-        const tabId = await this.getTargetTabId(p?.tabId)
-
-        const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: extractAttribute,
-            args: [p.selector ?? null, p.refId ?? null, p.attribute],
-        })
-
-        return results[0].result as {value: string | null}
+        return results[0].result as { html: string }
     }
 
     // ==================== Cookies ====================
+
+    private async getAttribute(params: unknown): Promise<{ value: string | null }> {
+        const p = params as { tabId?: number; selector?: string; refId?: string; attribute: string }
+        if (!p?.attribute) {
+            throw new Error('attribute is required')
+        }
+
+        const tabId = await this.getTargetTabId(p?.tabId)
+
+        const results = await chrome.scripting.executeScript({
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: extractAttribute,
+                                                                 args: [
+                                                                     p.selector ?? null,
+                                                                     p.refId ?? null,
+                                                                     p.attribute,
+                                                                 ],
+                                                             })
+
+        return results[0].result as { value: string | null }
+    }
 
     private async cookiesGet(params: unknown): Promise<chrome.cookies.Cookie[]> {
         const p = params as CookiesGetParams
 
         // 构建过滤条件
         const filter: chrome.cookies.GetAllDetails = {}
-        if (p?.url) filter.url = p.url
-        if (p?.name) filter.name = p.name
-        if (p?.domain) filter.domain = p.domain
-        if (p?.path) filter.path = p.path
-        if (p?.secure !== undefined) filter.secure = p.secure
-        if (p?.session !== undefined) filter.session = p.session
+        if (p?.url) {
+            filter.url = p.url
+        }
+        if (p?.name) {
+            filter.name = p.name
+        }
+        if (p?.domain) {
+            filter.domain = p.domain
+        }
+        if (p?.path) {
+            filter.path = p.path
+        }
+        if (p?.secure !== undefined) {
+            filter.secure = p.secure
+        }
+        if (p?.session !== undefined) {
+            filter.session = p.session
+        }
 
         return await chrome.cookies.getAll(filter)
     }
 
-    private async cookiesSet(params: unknown): Promise<{success: boolean}> {
+    private async cookiesSet(params: unknown): Promise<{ success: boolean }> {
         const p = params as CookiesSetParams
-        if (!p?.url || !p?.name) throw new Error('url and name are required')
+        if (!p?.url || !p?.name) {
+            throw new Error('url and name are required')
+        }
 
         await chrome.cookies.set({
-            url: p.url,
-            name: p.name,
-            value: p.value || '',
-            domain: p.domain,
-            path: p.path,
-            secure: p.secure,
-            httpOnly: p.httpOnly,
-            sameSite: p.sameSite,
-            expirationDate: p.expirationDate,
-        })
+                                     url: p.url,
+                                     name: p.name,
+                                     value: p.value || '',
+                                     domain: p.domain,
+                                     path: p.path,
+                                     secure: p.secure,
+                                     httpOnly: p.httpOnly,
+                                     sameSite: p.sameSite,
+                                     expirationDate: p.expirationDate,
+                                 })
 
         return {success: true}
     }
 
-    private async cookiesDelete(params: unknown): Promise<{success: boolean}> {
+    private async cookiesDelete(params: unknown): Promise<{ success: boolean }> {
         const p = params as CookiesDeleteParams
-        if (!p?.url || !p?.name) throw new Error('url and name are required')
+        if (!p?.url || !p?.name) {
+            throw new Error('url and name are required')
+        }
 
         await chrome.cookies.remove({
-            url: p.url,
-            name: p.name,
-        })
+                                        url: p.url,
+                                        name: p.name,
+                                    })
 
         return {success: true}
     }
 
-    private async cookiesClear(params: unknown): Promise<{success: boolean; count: number}> {
+    // ==================== Tab Groups ====================
+
+    private async cookiesClear(params: unknown): Promise<{ success: boolean; count: number }> {
         const p = params as CookiesClearParams
 
         // 构建过滤条件
         const filter: chrome.cookies.GetAllDetails = {}
-        if (p?.url) filter.url = p.url
-        if (p?.domain) filter.domain = p.domain
+        if (p?.url) {
+            filter.url = p.url
+        }
+        if (p?.domain) {
+            filter.domain = p.domain
+        }
 
         const cookies = await chrome.cookies.getAll(filter)
-        let count = 0
+        let count     = 0
 
         for (const cookie of cookies) {
             const protocol = cookie.secure ? 'https:' : 'http:'
             // cookie.domain 可能有前导点（如 .example.com），需要去掉以构建有效 URL
-            const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain
-            const url = `${protocol}//${domain}${cookie.path}`
+            const domain   = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain
+            const url      = `${protocol}//${domain}${cookie.path}`
             try {
                 await chrome.cookies.remove({url, name: cookie.name})
                 count++
@@ -879,44 +1017,48 @@ export class ActionHandler {
         return {success: true, count}
     }
 
-    // ==================== Tab Groups ====================
-
-    private async tabGroupCreate(params: unknown): Promise<{groupId: number; title: string; color: string}> {
+    private async tabGroupCreate(params: unknown): Promise<{ groupId: number; title: string; color: string }> {
         const p = params as TabGroupCreateParams
-        if (!p?.tabIds?.length) throw new Error('At least one tabId is required')
+        if (!p?.tabIds?.length) {
+            throw new Error('At least one tabId is required')
+        }
 
         const groupId = await chrome.tabs.group({tabIds: p.tabIds})
-        const title = p.title || 'MCP Chrome'
-        const color = p.color || 'cyan'
+        const title   = p.title || 'MCP Chrome'
+        const color   = p.color || 'cyan'
 
         await chrome.tabGroups.update(groupId, {title, color})
 
         return {groupId, title, color}
     }
 
-    private async tabGroupAdd(params: unknown, context: ActionContext): Promise<{success: boolean; groupId: number}> {
+    // ==================== Debugger (CDP) 操作 ====================
+
+    private async tabGroupAdd(params: unknown, context: ActionContext): Promise<{ success: boolean; groupId: number }> {
         const p = params as TabGroupAddParams
-        if (!p?.tabId) throw new Error('tabId is required')
+        if (!p?.tabId) {
+            throw new Error('tabId is required')
+        }
 
         const groupId = p.groupId ?? context.mcpTabGroupId
-        if (groupId === null || groupId === undefined) throw new Error('No tab group available')
+        if (groupId === null || groupId === undefined) {
+            throw new Error('No tab group available')
+        }
 
         await chrome.tabs.group({tabIds: [p.tabId], groupId})
 
         return {success: true, groupId}
     }
 
-    // ==================== Debugger (CDP) 操作 ====================
-
-    private async debuggerAttach(params: unknown): Promise<{success: boolean; tabId: number}> {
-        const p = params as DebuggerAttachParams | undefined
+    private async debuggerAttach(params: unknown): Promise<{ success: boolean; tabId: number }> {
+        const p     = params as DebuggerAttachParams | undefined
         const tabId = await this.getTargetTabId(p?.tabId)
         await this.ensureDebuggerAttached(tabId)
         return {success: true, tabId}
     }
 
-    private async debuggerDetach(params: unknown): Promise<{success: boolean}> {
-        const p = params as DebuggerDetachParams | undefined
+    private async debuggerDetach(params: unknown): Promise<{ success: boolean }> {
+        const p     = params as DebuggerDetachParams | undefined
         const tabId = await this.getTargetTabId(p?.tabId)
 
         if (!this.attachedTabs.has(tabId)) {
@@ -932,9 +1074,13 @@ export class ActionHandler {
         return {success: true}
     }
 
+    // ==================== 输入事件（通过 CDP）====================
+
     private async debuggerSend(params: unknown): Promise<unknown> {
         const p = params as DebuggerSendParams
-        if (!p?.method) throw new Error('method is required')
+        if (!p?.method) {
+            throw new Error('method is required')
+        }
 
         const tabId = await this.getTargetTabId(p.tabId)
         await this.ensureDebuggerAttached(tabId)
@@ -942,11 +1088,11 @@ export class ActionHandler {
         return await chrome.debugger.sendCommand({tabId}, p.method, p.params)
     }
 
-    // ==================== 输入事件（通过 CDP）====================
-
-    private async inputKey(params: unknown): Promise<{success: boolean}> {
+    private async inputKey(params: unknown): Promise<{ success: boolean }> {
         const p = params as KeyEventParams
-        if (!p?.type) throw new Error('type is required')
+        if (!p?.type) {
+            throw new Error('type is required')
+        }
 
         const tabId = await this.getTargetTabId(p.tabId)
         await this.ensureDebuggerAttached(tabId)
@@ -955,19 +1101,31 @@ export class ActionHandler {
             type: p.type,
         }
 
-        if (p.key) cdpParams.key = p.key
-        if (p.code) cdpParams.code = p.code
-        if (p.text) cdpParams.text = p.text
-        if (p.windowsVirtualKeyCode !== undefined) cdpParams.windowsVirtualKeyCode = p.windowsVirtualKeyCode
-        if (p.nativeVirtualKeyCode !== undefined) cdpParams.nativeVirtualKeyCode = p.nativeVirtualKeyCode
-        if (p.modifiers !== undefined) cdpParams.modifiers = p.modifiers
+        if (p.key) {
+            cdpParams.key = p.key
+        }
+        if (p.code) {
+            cdpParams.code = p.code
+        }
+        if (p.text) {
+            cdpParams.text = p.text
+        }
+        if (p.windowsVirtualKeyCode !== undefined) {
+            cdpParams.windowsVirtualKeyCode = p.windowsVirtualKeyCode
+        }
+        if (p.nativeVirtualKeyCode !== undefined) {
+            cdpParams.nativeVirtualKeyCode = p.nativeVirtualKeyCode
+        }
+        if (p.modifiers !== undefined) {
+            cdpParams.modifiers = p.modifiers
+        }
 
         await chrome.debugger.sendCommand({tabId}, 'Input.dispatchKeyEvent', cdpParams)
 
         return {success: true}
     }
 
-    private async inputMouse(params: unknown): Promise<{success: boolean}> {
+    private async inputMouse(params: unknown): Promise<{ success: boolean }> {
         const p = params as MouseEventParams
         if (!p?.type || p.x === undefined || p.y === undefined) {
             throw new Error('type, x, y are required')
@@ -982,18 +1140,28 @@ export class ActionHandler {
             y: p.y,
         }
 
-        if (p.button && p.button !== 'none') cdpParams.button = p.button
-        if (p.clickCount !== undefined) cdpParams.clickCount = p.clickCount
-        if (p.deltaX !== undefined) cdpParams.deltaX = p.deltaX
-        if (p.deltaY !== undefined) cdpParams.deltaY = p.deltaY
-        if (p.modifiers !== undefined) cdpParams.modifiers = p.modifiers
+        if (p.button && p.button !== 'none') {
+            cdpParams.button = p.button
+        }
+        if (p.clickCount !== undefined) {
+            cdpParams.clickCount = p.clickCount
+        }
+        if (p.deltaX !== undefined) {
+            cdpParams.deltaX = p.deltaX
+        }
+        if (p.deltaY !== undefined) {
+            cdpParams.deltaY = p.deltaY
+        }
+        if (p.modifiers !== undefined) {
+            cdpParams.modifiers = p.modifiers
+        }
 
         await chrome.debugger.sendCommand({tabId}, 'Input.dispatchMouseEvent', cdpParams)
 
         return {success: true}
     }
 
-    private async inputTouch(params: unknown): Promise<{success: boolean}> {
+    private async inputTouch(params: unknown): Promise<{ success: boolean }> {
         const p = params as TouchEventParams
         if (!p?.type || !p?.touchPoints) {
             throw new Error('type and touchPoints are required')
@@ -1007,16 +1175,22 @@ export class ActionHandler {
             touchPoints: p.touchPoints,
         }
 
-        if (p.modifiers !== undefined) cdpParams.modifiers = p.modifiers
+        if (p.modifiers !== undefined) {
+            cdpParams.modifiers = p.modifiers
+        }
 
         await chrome.debugger.sendCommand({tabId}, 'Input.dispatchTouchEvent', cdpParams)
 
         return {success: true}
     }
 
-    private async inputType(params: unknown): Promise<{success: boolean}> {
-        const p = params as {tabId?: number; text: string; delay?: number}
-        if (!p?.text) throw new Error('text is required')
+    // ==================== 控制台日志 ====================
+
+    private async inputType(params: unknown): Promise<{ success: boolean }> {
+        const p = params as { tabId?: number; text: string; delay?: number }
+        if (!p?.text) {
+            throw new Error('text is required')
+        }
 
         const tabId = await this.getTargetTabId(p.tabId)
         await this.ensureDebuggerAttached(tabId)
@@ -1038,10 +1212,8 @@ export class ActionHandler {
         return {success: true}
     }
 
-    // ==================== 控制台日志 ====================
-
-    private async consoleEnable(params: unknown): Promise<{success: boolean}> {
-        const p = params as {tabId?: number}
+    private async consoleEnable(params: unknown): Promise<{ success: boolean }> {
+        const p     = params as { tabId?: number }
         const tabId = await this.getTargetTabId(p?.tabId)
         await this.ensureDebuggerAttached(tabId)
 
@@ -1056,8 +1228,8 @@ export class ActionHandler {
         return {success: true}
     }
 
-    private async consoleGet(params: unknown): Promise<{messages: ConsoleMessage[]}> {
-        const p = params as {tabId?: number; level?: string; pattern?: string; clear?: boolean}
+    private async consoleGet(params: unknown): Promise<{ messages: ConsoleMessage[] }> {
+        const p     = params as { tabId?: number; level?: string; pattern?: string; clear?: boolean }
         const tabId = await this.getTargetTabId(p?.tabId)
 
         let messages = this.consoleMessages.get(tabId) || []
@@ -1070,7 +1242,7 @@ export class ActionHandler {
         // 按正则过滤
         if (p?.pattern) {
             const regex = new RegExp(p.pattern, 'i')
-            messages = messages.filter(m => regex.test(m.text))
+            messages    = messages.filter(m => regex.test(m.text))
         }
 
         // 清除已读消息
@@ -1081,8 +1253,10 @@ export class ActionHandler {
         return {messages}
     }
 
-    private async consoleClear(params: unknown): Promise<{success: boolean}> {
-        const p = params as {tabId?: number}
+    // ==================== 网络日志 ====================
+
+    private async consoleClear(params: unknown): Promise<{ success: boolean }> {
+        const p     = params as { tabId?: number }
         const tabId = await this.getTargetTabId(p?.tabId)
 
         this.consoleMessages.set(tabId, [])
@@ -1090,10 +1264,8 @@ export class ActionHandler {
         return {success: true}
     }
 
-    // ==================== 网络日志 ====================
-
-    private async networkEnable(params: unknown): Promise<{success: boolean}> {
-        const p = params as {tabId?: number}
+    private async networkEnable(params: unknown): Promise<{ success: boolean }> {
+        const p     = params as { tabId?: number }
         const tabId = await this.getTargetTabId(p?.tabId)
         await this.ensureDebuggerAttached(tabId)
 
@@ -1107,8 +1279,8 @@ export class ActionHandler {
         return {success: true}
     }
 
-    private async networkGet(params: unknown): Promise<{requests: NetworkRequest[]}> {
-        const p = params as {tabId?: number; urlPattern?: string; clear?: boolean}
+    private async networkGet(params: unknown): Promise<{ requests: NetworkRequest[] }> {
+        const p     = params as { tabId?: number; urlPattern?: string; clear?: boolean }
         const tabId = await this.getTargetTabId(p?.tabId)
 
         let requests = this.networkRequests.get(tabId) || []
@@ -1116,7 +1288,7 @@ export class ActionHandler {
         // 按 URL 模式过滤
         if (p?.urlPattern) {
             const regex = new RegExp(p.urlPattern.replace(/\*/g, '.*'), 'i')
-            requests = requests.filter(r => regex.test(r.url))
+            requests    = requests.filter(r => regex.test(r.url))
         }
 
         if (p?.clear) {
@@ -1126,18 +1298,16 @@ export class ActionHandler {
         return {requests}
     }
 
-    private async networkClear(params: unknown): Promise<{success: boolean}> {
-        const p = params as {tabId?: number}
+    // ==================== Debugger 辅助方法 ====================
+
+    private async networkClear(params: unknown): Promise<{ success: boolean }> {
+        const p     = params as { tabId?: number }
         const tabId = await this.getTargetTabId(p?.tabId)
 
         this.networkRequests.set(tabId, [])
 
         return {success: true}
     }
-
-    // ==================== Debugger 辅助方法 ====================
-
-    private pendingAttach = new Map<number, Promise<void>>()
 
     /**
      * 确保 debugger 已附加到指定 tab
@@ -1146,7 +1316,9 @@ export class ActionHandler {
      * 其余请求等待同一个 Promise 完成。
      */
     private async ensureDebuggerAttached(tabId: number): Promise<void> {
-        if (this.attachedTabs.has(tabId)) return
+        if (this.attachedTabs.has(tabId)) {
+            return
+        }
 
         // 已有正在进行的 attach，等待它完成
         const pending = this.pendingAttach.get(tabId)
@@ -1169,8 +1341,8 @@ export class ActionHandler {
 
     // ==================== Stealth 模式（JS 事件模拟）====================
 
-    private async stealthClick(params: unknown): Promise<{success: boolean}> {
-        const p = params as {tabId?: number; x: number; y: number; button?: string}
+    private async stealthClick(params: unknown): Promise<{ success: boolean }> {
+        const p = params as { tabId?: number; x: number; y: number; button?: string }
         if (p.x === undefined || p.y === undefined) {
             throw new Error('x, y are required')
         }
@@ -1178,46 +1350,68 @@ export class ActionHandler {
         const tabId = await this.getTargetTabId(p?.tabId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: simulateMouseClick,
-            args: [p.x, p.y, p.button || 'left'],
-        })
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: simulateMouseClick,
+                                                                 args: [p.x, p.y, p.button || 'left'],
+                                                             })
 
-        return results[0].result as {success: boolean}
+        return results[0].result as { success: boolean }
     }
 
-    private async stealthType(params: unknown): Promise<{success: boolean}> {
-        const p = params as {tabId?: number; text: string; delay?: number}
-        if (!p?.text) throw new Error('text is required')
+    private async stealthType(params: unknown): Promise<{ success: boolean }> {
+        const p = params as { tabId?: number; text: string; delay?: number }
+        if (!p?.text) {
+            throw new Error('text is required')
+        }
 
         const tabId = await this.getTargetTabId(p?.tabId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: simulateKeyboardType,
-            args: [p.text, p.delay || 0],
-        })
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: simulateKeyboardType,
+                                                                 args: [p.text, p.delay || 0],
+                                                             })
 
-        return results[0].result as {success: boolean}
+        return results[0].result as { success: boolean }
     }
 
-    private async stealthKey(params: unknown): Promise<{success: boolean}> {
-        const p = params as {tabId?: number; key: string; type: 'down' | 'up' | 'press'; modifiers?: string[]}
-        if (!p?.key) throw new Error('key is required')
+    private async stealthKey(params: unknown): Promise<{ success: boolean }> {
+        const p = params as { tabId?: number; key: string; type: 'down' | 'up' | 'press'; modifiers?: string[] }
+        if (!p?.key) {
+            throw new Error('key is required')
+        }
 
         const tabId = await this.getTargetTabId(p?.tabId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: simulateKeyEvent,
-            args: [p.key, p.type || 'press', p.modifiers || []],
-        })
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: simulateKeyEvent,
+                                                                 args: [p.key, p.type || 'press', p.modifiers || []],
+                                                             })
 
-        return results[0].result as {success: boolean}
+        return results[0].result as { success: boolean }
     }
 
-    private async stealthMouse(params: unknown): Promise<{success: boolean}> {
-        const p = params as {tabId?: number; type: string; x: number; y: number; button?: string}
+    private async stealthMouse(params: unknown): Promise<{ success: boolean }> {
+        const p = params as { tabId?: number; type: string; x: number; y: number; button?: string }
         if (!p?.type || p.x === undefined || p.y === undefined) {
             throw new Error('type, x, y are required')
         }
@@ -1225,23 +1419,29 @@ export class ActionHandler {
         const tabId = await this.getTargetTabId(p?.tabId)
 
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: simulateMouseEvent,
-            args: [p.type, p.x, p.y, p.button || 'left'],
-        })
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: simulateMouseEvent,
+                                                                 args: [p.type, p.x, p.y, p.button || 'left'],
+                                                             })
 
-        return results[0].result as {success: boolean}
+        return results[0].result as { success: boolean }
     }
 
-    private async stealthInject(params: unknown): Promise<{success: boolean}> {
-        const p = params as {tabId?: number}
+    private async stealthInject(params: unknown): Promise<{ success: boolean }> {
+        const p     = params as { tabId?: number }
         const tabId = await this.getTargetTabId(p?.tabId)
 
         await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [(p as {frameId?: number})?.frameId ?? 0]},
-            func: injectStealthScripts,
-            world: 'MAIN',  // 注入到主世界，覆盖原生属性
-        })
+                                                 target: {tabId, frameIds: [(p as { frameId?: number })?.frameId ?? 0]},
+                                                 func: injectStealthScripts,
+                                                 world: 'MAIN',  // 注入到主世界，覆盖原生属性
+                                             })
 
         return {success: true}
     }
@@ -1256,55 +1456,77 @@ export class ActionHandler {
      * 2. 通过 chrome.webNavigation.getAllFrames 获取所有子框架
      * 3. 先尝试 URL 精确匹配，再按 DOM 索引匹配
      */
-    private async resolveFrame(params: unknown): Promise<{frameId: number}> {
+    private async resolveFrame(params: unknown): Promise<{ frameId: number }> {
         const p = params as ResolveFrameParams
-        if (p.frame === undefined) throw new Error('frame is required')
+        if (p.frame === undefined) {
+            throw new Error('frame is required')
+        }
 
         const tabId = await this.getTargetTabId(p.tabId)
 
         // 获取所有 frames
         const allFrames = await chrome.webNavigation.getAllFrames({tabId})
-        if (!allFrames) throw new Error('Failed to get frames')
+        if (!allFrames) {
+            throw new Error('Failed to get frames')
+        }
 
         // 主框架的直接子 iframe
         const childFrames = allFrames.filter(f => f.parentFrameId === 0 && f.frameId !== 0)
-        if (childFrames.length === 0) throw new Error('No iframes found in page')
+        if (childFrames.length === 0) {
+            throw new Error('No iframes found in page')
+        }
 
         // 在主框架中查找目标 iframe 的信息
         const results = await chrome.scripting.executeScript({
-            target: {tabId, frameIds: [0]},
-            func: (frame: string | number) => {
-                const iframes = Array.from(document.querySelectorAll('iframe, frame')) as HTMLIFrameElement[]
-                let target: HTMLIFrameElement | null = null
-                let index = -1
+                                                                 target: {tabId, frameIds: [0]},
+                                                                 func: (frame: string | number) => {
+                                                                     const iframes                        = Array.from(
+                                                                         document.querySelectorAll('iframe, frame')) as HTMLIFrameElement[]
+                                                                     let target: HTMLIFrameElement | null = null
+                                                                     let index                            = -1
 
-                if (typeof frame === 'number') {
-                    if (frame < 0 || frame >= iframes.length) return null
-                    target = iframes[frame]
-                    index = frame
-                } else {
-                    target = document.querySelector(frame) as HTMLIFrameElement
-                    if (target) {
-                        index = iframes.indexOf(target)
-                    }
-                }
+                                                                     if (typeof frame === 'number') {
+                                                                         if (frame <
+                                                                             0 ||
+                                                                             frame >=
+                                                                             iframes.length) {
+                                                                             return null
+                                                                         }
+                                                                         target = iframes[frame]
+                                                                         index  = frame
+                                                                     } else {
+                                                                         target =
+                                                                             document.querySelector(frame) as HTMLIFrameElement
+                                                                         if (target) {
+                                                                             index = iframes.indexOf(target)
+                                                                         }
+                                                                     }
 
-                if (!target) return null
+                                                                     if (!target) {
+                                                                         return null
+                                                                     }
 
-                // 获取绝对 URL
-                let absoluteSrc = target.src || ''
-                if (absoluteSrc && !absoluteSrc.startsWith('http') && !absoluteSrc.startsWith('about:')) {
-                    try {
-                        absoluteSrc = new URL(absoluteSrc, location.href).href
-                    } catch { /* keep original */ }
-                }
+                                                                     // 获取绝对 URL
+                                                                     let absoluteSrc = target.src || ''
+                                                                     if (absoluteSrc &&
+                                                                         !absoluteSrc.startsWith('http') &&
+                                                                         !absoluteSrc.startsWith('about:')) {
+                                                                         try {
+                                                                             absoluteSrc =
+                                                                                 new URL(
+                                                                                     absoluteSrc,
+                                                                                     location.href,
+                                                                                 ).href
+                                                                         } catch { /* keep original */
+                                                                         }
+                                                                     }
 
-                return {src: absoluteSrc, index}
-            },
-            args: [p.frame],
-        })
+                                                                     return {src: absoluteSrc, index}
+                                                                 },
+                                                                 args: [p.frame],
+                                                             })
 
-        const info = results[0]?.result as {src: string; index: number} | null
+        const info = results[0]?.result as { src: string; index: number } | null
         if (!info) {
             const desc = typeof p.frame === 'number' ? `index ${p.frame}` : `selector "${p.frame}"`
             throw new Error(`iframe not found: ${desc}`)
@@ -1329,12 +1551,16 @@ export class ActionHandler {
     /**
      * 获取页面所有 frame 信息
      */
-    private async getAllFrames(params: unknown): Promise<{frames: Array<{frameId: number; parentFrameId: number; url: string}>}> {
-        const p = params as {tabId?: number}
+    private async getAllFrames(params: unknown): Promise<{
+        frames: Array<{ frameId: number; parentFrameId: number; url: string }>
+    }> {
+        const p     = params as { tabId?: number }
         const tabId = await this.getTargetTabId(p?.tabId)
 
         const frames = await chrome.webNavigation.getAllFrames({tabId})
-        if (!frames) throw new Error('Failed to get frames')
+        if (!frames) {
+            throw new Error('Failed to get frames')
+        }
 
         return {
             frames: frames.map(f => ({
@@ -1360,24 +1586,34 @@ export class ActionHandler {
             awaitPromise?: boolean
             timeout?: number
         }
-        if (p.frameId === undefined) throw new Error('frameId is required')
-        if (!p.expression) throw new Error('expression is required')
+        if (p.frameId === undefined) {
+            throw new Error('frameId is required')
+        }
+        if (!p.expression) {
+            throw new Error('expression is required')
+        }
 
         const tabId = await this.getTargetTabId(p.tabId)
         await this.ensureDebuggerAttached(tabId)
 
         // 获取 Extension frameId 对应的 URL
         const extFrames = await chrome.webNavigation.getAllFrames({tabId})
-        if (!extFrames) throw new Error('Failed to enumerate frames')
+        if (!extFrames) {
+            throw new Error('Failed to enumerate frames')
+        }
         const targetFrame = extFrames.find(f => f.frameId === p.frameId)
-        if (!targetFrame) throw new Error(`Frame ${p.frameId} not found`)
+        if (!targetFrame) {
+            throw new Error(`Frame ${p.frameId} not found`)
+        }
 
         // 获取 CDP frame tree，通过 URL 匹配找到 CDP frameId
-        const treeResult = await chrome.debugger.sendCommand({tabId}, 'Page.getFrameTree') as {
-            frameTree: {frame: {id: string; url: string}; childFrames?: Array<unknown>}
+        const treeResult  = await chrome.debugger.sendCommand({tabId}, 'Page.getFrameTree') as {
+            frameTree: { frame: { id: string; url: string }; childFrames?: Array<unknown> }
         }
         const cdpFrameIds = this.findCdpFrameIds(treeResult.frameTree, targetFrame.url)
-        if (cdpFrameIds.length === 0) throw new Error(`Cannot resolve CDP frame for URL: ${targetFrame.url}`)
+        if (cdpFrameIds.length === 0) {
+            throw new Error(`Cannot resolve CDP frame for URL: ${targetFrame.url}`)
+        }
         if (cdpFrameIds.length > 1) {
             throw new Error(
                 `Multiple CDP frames (${cdpFrameIds.length}) match URL "${targetFrame.url}". `
@@ -1420,11 +1656,13 @@ export class ActionHandler {
 
     /** 在 CDP frame tree 中递归收集所有匹配 URL 的 frameId */
     private findCdpFrameIds(
-        node: {frame: {id: string; url: string}; childFrames?: Array<unknown>},
+        node: { frame: { id: string; url: string }; childFrames?: Array<unknown> },
         targetUrl: string,
     ): string[] {
         const results: string[] = []
-        if (node.frame.url === targetUrl) results.push(node.frame.id)
+        if (node.frame.url === targetUrl) {
+            results.push(node.frame.id)
+        }
         for (const child of (node.childFrames || []) as Array<typeof node>) {
             results.push(...this.findCdpFrameIds(child, targetUrl))
         }
@@ -1434,7 +1672,9 @@ export class ActionHandler {
     // ==================== 辅助方法 ====================
 
     private async getTargetTabId(tabId?: number): Promise<number> {
-        if (tabId !== undefined && tabId !== null) return tabId
+        if (tabId !== undefined && tabId !== null) {
+            return tabId
+        }
 
         const [activeTab] = await chrome.tabs.query({active: true, currentWindow: true})
         if (!activeTab?.id) {
@@ -1450,14 +1690,28 @@ export class ActionHandler {
             // DOMContentLoaded：事件监听 + 轮询兜底
             await new Promise<void>((resolve, reject) => {
                 let settled = false
-                const done = () => { if (!settled) { settled = true; cleanup(); resolve() } }
-                const fail = (err: Error) => { if (!settled) { settled = true; cleanup(); reject(err) } }
+                const done  = () => {
+                    if (!settled) {
+                        settled = true
+                        cleanup()
+                        resolve()
+                    }
+                }
+                const fail  = (err: Error) => {
+                    if (!settled) {
+                        settled = true
+                        cleanup()
+                        reject(err)
+                    }
+                }
 
-                const onDCL = (details: {tabId: number; frameId: number}) => {
-                    if (details.tabId === tabId && details.frameId === 0) done()
+                const onDCL     = (details: { tabId: number; frameId: number }) => {
+                    if (details.tabId === tabId && details.frameId === 0) {
+                        done()
+                    }
                 }
                 const timeoutId = setTimeout(() => fail(new Error('Navigation timeout')), timeout)
-                const cleanup = () => {
+                const cleanup   = () => {
                     chrome.webNavigation.onDOMContentLoaded.removeListener(onDCL)
                     clearTimeout(timeoutId)
                 }
@@ -1466,11 +1720,19 @@ export class ActionHandler {
 
                 // 轮询兜底：tab.status === 'complete' 意味着 DOMContentLoaded 已过
                 const checkStatus = async () => {
-                    if (settled) return
+                    if (settled) {
+                        return
+                    }
                     try {
                         const tab = await chrome.tabs.get(tabId)
-                        if (tab.status === 'complete') { done(); return }
-                    } catch (e) { fail(e as Error); return }
+                        if (tab.status === 'complete') {
+                            done()
+                            return
+                        }
+                    } catch (e) {
+                        fail(e as Error)
+                        return
+                    }
                     setTimeout(checkStatus, 100)
                 }
                 checkStatus()
@@ -1519,9 +1781,9 @@ function generateAccessibilityTree(
     maxDepth: number,
     maxLength: number | null,
     refId: string | null,
-): {pageContent: string; viewport: {width: number; height: number}; error?: string} {
+): { pageContent: string; viewport: { width: number; height: number }; error?: string } {
     // 初始化元素映射
-    const win = window as Window & {
+    const win           = window as Window & {
         __mcpElementMap?: Record<string, WeakRef<Element>>
         __mcpRefCounter?: number
     }
@@ -1532,19 +1794,23 @@ function generateAccessibilityTree(
 
     function getRole(element: Element): string {
         const role = element.getAttribute('role')
-        if (role) return role
+        if (role) {
+            return role
+        }
 
-        const tag = element.tagName.toLowerCase()
+        const tag  = element.tagName.toLowerCase()
         const type = element.getAttribute('type')
 
         const roleMap: Record<string, string> = {
             a: 'link',
             button: 'button',
             input: type === 'submit' || type === 'button' ? 'button'
-                : type === 'checkbox' ? 'checkbox'
-                    : type === 'radio' ? 'radio'
-                        : type === 'file' ? 'button'
-                            : 'textbox',
+                                                          : type === 'checkbox' ? 'checkbox'
+                                                                                : type === 'radio' ?
+                                                                                  'radio'
+                                                                                                   :
+                                                                                  type === 'file' ? 'button'
+                                                                                                  : 'textbox',
             select: 'combobox',
             textarea: 'textbox',
             h1: 'heading', h2: 'heading', h3: 'heading',
@@ -1572,39 +1838,55 @@ function generateAccessibilityTree(
 
         // Select 元素
         if (tag === 'select') {
-            const select = element as HTMLSelectElement
+            const select   = element as HTMLSelectElement
             const selected = select.querySelector('option[selected]') || select.options[select.selectedIndex]
-            if (selected?.textContent) return selected.textContent.trim()
+            if (selected?.textContent) {
+                return selected.textContent.trim()
+            }
         }
 
         // ARIA label
         const ariaLabel = element.getAttribute('aria-label')
-        if (ariaLabel?.trim()) return ariaLabel.trim()
+        if (ariaLabel?.trim()) {
+            return ariaLabel.trim()
+        }
 
         // Placeholder
         const placeholder = element.getAttribute('placeholder')
-        if (placeholder?.trim()) return placeholder.trim()
+        if (placeholder?.trim()) {
+            return placeholder.trim()
+        }
 
         // Title
         const title = element.getAttribute('title')
-        if (title?.trim()) return title.trim()
+        if (title?.trim()) {
+            return title.trim()
+        }
 
         // Alt
         const alt = element.getAttribute('alt')
-        if (alt?.trim()) return alt.trim()
+        if (alt?.trim()) {
+            return alt.trim()
+        }
 
         // Label for
         if (element.id) {
             const label = document.querySelector(`label[for="${CSS.escape(element.id)}"]`)
-            if (label?.textContent?.trim()) return label.textContent.trim()
+            if (label?.textContent?.trim()) {
+                return label.textContent.trim()
+            }
         }
 
         // Input value
         if (tag === 'input') {
-            const input = element as HTMLInputElement
+            const input     = element as HTMLInputElement
             const inputType = input.type || ''
-            if (inputType === 'submit' && input.value?.trim()) return input.value.trim()
-            if (input.value && input.value.length < 50) return input.value.trim()
+            if (inputType === 'submit' && input.value?.trim()) {
+                return input.value.trim()
+            }
+            if (input.value && input.value.length < 50) {
+                return input.value.trim()
+            }
         }
 
         // Button/Link text
@@ -1615,13 +1897,17 @@ function generateAccessibilityTree(
                     text += child.textContent
                 }
             }
-            if (text.trim()) return text.trim()
+            if (text.trim()) {
+                return text.trim()
+            }
         }
 
         // Heading text
         if (tag.match(/^h[1-6]$/)) {
             const text = element.textContent
-            if (text?.trim()) return text.trim().substring(0, 100)
+            if (text?.trim()) {
+                return text.trim().substring(0, 100)
+            }
         }
 
         // Generic text content
@@ -1641,28 +1927,42 @@ function generateAccessibilityTree(
 
     function isVisible(element: Element): boolean {
         const style = window.getComputedStyle(element)
-        const el = element as HTMLElement
+        const el    = element as HTMLElement
         return style.display !== 'none'
-            && style.visibility !== 'hidden'
-            && style.opacity !== '0'
-            && el.offsetWidth > 0
-            && el.offsetHeight > 0
+               && style.visibility !== 'hidden'
+               && style.opacity !== '0'
+               && el.offsetWidth > 0
+               && el.offsetHeight > 0
     }
 
     function isInteractive(element: Element): boolean {
         const tag = element.tagName.toLowerCase()
         return ['a', 'button', 'input', 'select', 'textarea', 'details', 'summary'].includes(tag)
-            || element.getAttribute('onclick') !== null
-            || element.getAttribute('tabindex') !== null
-            || element.getAttribute('role') === 'button'
-            || element.getAttribute('role') === 'link'
-            || element.getAttribute('contenteditable') === 'true'
+               || element.getAttribute('onclick') !== null
+               || element.getAttribute('tabindex') !== null
+               || element.getAttribute('role') === 'button'
+               || element.getAttribute('role') === 'link'
+               || element.getAttribute('contenteditable') === 'true'
     }
 
     function isLandmark(element: Element): boolean {
         const tag = element.tagName.toLowerCase()
-        return ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'nav', 'main', 'header', 'footer', 'section', 'article', 'aside'].includes(tag)
-            || element.getAttribute('role') !== null
+        return [
+                   'h1',
+                   'h2',
+                   'h3',
+                   'h4',
+                   'h5',
+                   'h6',
+                   'nav',
+                   'main',
+                   'header',
+                   'footer',
+                   'section',
+                   'article',
+                   'aside',
+               ].includes(tag)
+               || element.getAttribute('role') !== null
     }
 
     function shouldInclude(element: Element, checkRefId: boolean): boolean {
@@ -1683,7 +1983,7 @@ function generateAccessibilityTree(
         if (filter !== 'all' && !checkRefId) {
             const rect = element.getBoundingClientRect()
             if (!(rect.top < window.innerHeight && rect.bottom > 0 &&
-                rect.left < window.innerWidth && rect.right > 0)) {
+                  rect.left < window.innerWidth && rect.right > 0)) {
                 return false
             }
         }
@@ -1692,9 +1992,15 @@ function generateAccessibilityTree(
             return isInteractive(element)
         }
 
-        if (isInteractive(element)) return true
-        if (isLandmark(element)) return true
-        if (getName(element).length > 0) return true
+        if (isInteractive(element)) {
+            return true
+        }
+        if (isLandmark(element)) {
+            return true
+        }
+        if (getName(element).length > 0) {
+            return true
+        }
 
         const role = getRole(element)
         return role !== 'generic' && role !== 'image'
@@ -1707,19 +2013,21 @@ function generateAccessibilityTree(
             }
         }
 
-        const newRefId = `ref_${++win.__mcpRefCounter!}`
+        const newRefId                 = `ref_${++win.__mcpRefCounter!}`
         win.__mcpElementMap![newRefId] = new WeakRef(element)
         return newRefId
     }
 
     function traverse(element: Element, level: number, checkRefId: boolean) {
-        if (level > maxDepth || !element || !element.tagName) return
+        if (level > maxDepth || !element || !element.tagName) {
+            return
+        }
 
         const include = shouldInclude(element, checkRefId) || (checkRefId && level === 0)
 
         if (include) {
-            const role = getRole(element)
-            const name = getName(element)
+            const role         = getRole(element)
+            const name         = getName(element)
             const elementRefId = getOrCreateRef(element)
 
             let line = '  '.repeat(level) + role
@@ -1729,10 +2037,14 @@ function generateAccessibilityTree(
             line += ` [${elementRefId}]`
 
             const href = element.getAttribute('href')
-            if (href) line += ` href="${href}"`
+            if (href) {
+                line += ` href="${href}"`
+            }
 
             const type = element.getAttribute('type')
-            if (type) line += ` type="${type}"`
+            if (type) {
+                line += ` type="${type}"`
+            }
 
             lines.push(line)
 
@@ -1740,12 +2052,14 @@ function generateAccessibilityTree(
             if (element.tagName.toLowerCase() === 'select') {
                 const select = element as HTMLSelectElement
                 for (const option of select.options) {
-                    let optLine = '  '.repeat(level + 1) + 'option'
+                    let optLine   = '  '.repeat(level + 1) + 'option'
                     const optText = option.textContent?.trim() || ''
                     if (optText) {
                         optLine += ` "${optText.replace(/\s+/g, ' ').substring(0, 100).replace(/"/g, '\\"')}"`
                     }
-                    if (option.selected) optLine += ' (selected)'
+                    if (option.selected) {
+                        optLine += ' (selected)'
+                    }
                     if (option.value && option.value !== optText) {
                         optLine += ` value="${option.value.replace(/"/g, '\\"')}"`
                     }
@@ -1808,8 +2122,8 @@ function generateAccessibilityTree(
 }
 
 // 点击操作（高效模式）
-function performClick(refId: string): {success: boolean; error?: string} {
-    const win = window as Window & {__mcpElementMap?: Record<string, WeakRef<Element>>}
+function performClick(refId: string): { success: boolean; error?: string } {
+    const win = window as Window & { __mcpElementMap?: Record<string, WeakRef<Element>> }
     const ref = win.__mcpElementMap?.[refId]
 
     if (!ref) {
@@ -1833,8 +2147,8 @@ function performClick(refId: string): {success: boolean; error?: string} {
 }
 
 // 输入操作（高效模式）
-function performType(refId: string, text: string, clear: boolean): {success: boolean; error?: string} {
-    const win = window as Window & {__mcpElementMap?: Record<string, WeakRef<Element>>}
+function performType(refId: string, text: string, clear: boolean): { success: boolean; error?: string } {
+    const win = window as Window & { __mcpElementMap?: Record<string, WeakRef<Element>> }
     const ref = win.__mcpElementMap?.[refId]
 
     if (!ref) {
@@ -1867,9 +2181,14 @@ function performType(refId: string, text: string, clear: boolean): {success: boo
 }
 
 // 滚动操作
-function performScroll(x: number, y: number, refId: string | null): {success: boolean; scrollX: number; scrollY: number; error?: string} {
+function performScroll(x: number, y: number, refId: string | null): {
+    success: boolean;
+    scrollX: number;
+    scrollY: number;
+    error?: string
+} {
     if (refId) {
-        const win = window as Window & {__mcpElementMap?: Record<string, WeakRef<Element>>}
+        const win = window as Window & { __mcpElementMap?: Record<string, WeakRef<Element>> }
         const ref = win.__mcpElementMap?.[refId]
 
         if (!ref) {
@@ -1890,16 +2209,16 @@ function performScroll(x: number, y: number, refId: string | null): {success: bo
 }
 
 // 代码执行
-function executeCode(code: string): {success: boolean; result?: string; error?: string} {
+function executeCode(code: string): { success: boolean; result?: string; error?: string } {
     try {
         // 使用 Function 构造函数替代 eval，更容易处理返回值
-        const fn = new Function(`return (${code})`)
+        const fn     = new Function(`return (${code})`)
         const result = fn()
         return {success: true, result: JSON.stringify(result)}
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error'
         // 检测 CSP 相关错误
-        if (errorMsg.includes('Content Security Policy') || errorMsg.includes("'unsafe-eval'")) {
+        if (errorMsg.includes('Content Security Policy') || errorMsg.includes('\'unsafe-eval\'')) {
             return {
                 success: false,
                 error: `CSP 限制：此页面禁止动态代码执行。建议使用 extract 工具获取页面内容，或使用 CDP 模式。原始错误: ${errorMsg}`,
@@ -1910,7 +2229,7 @@ function executeCode(code: string): {success: boolean; result?: string; error?: 
 }
 
 // 提取文本
-function extractText(selector: string | null): {text: string} {
+function extractText(selector: string | null): { text: string } {
     if (selector) {
         const element = document.querySelector(selector)
         return {text: element?.textContent || ''}
@@ -1919,23 +2238,25 @@ function extractText(selector: string | null): {text: string} {
 }
 
 // 提取 HTML
-function extractHtml(selector: string | null, outer: boolean): {html: string} {
+function extractHtml(selector: string | null, outer: boolean): { html: string } {
     if (selector) {
         const element = document.querySelector(selector)
-        if (!element) return {html: ''}
+        if (!element) {
+            return {html: ''}
+        }
         return {html: outer ? element.outerHTML : element.innerHTML}
     }
     return {html: document.documentElement.outerHTML}
 }
 
 // 提取属性
-function extractAttribute(selector: string | null, refId: string | null, attribute: string): {value: string | null} {
+function extractAttribute(selector: string | null, refId: string | null, attribute: string): { value: string | null } {
     let element: Element | null = null
 
     if (refId) {
-        const win = window as Window & {__mcpElementMap?: Record<string, WeakRef<Element>>}
+        const win = window as Window & { __mcpElementMap?: Record<string, WeakRef<Element>> }
         const ref = win.__mcpElementMap?.[refId]
-        element = ref?.deref() ?? null
+        element   = ref?.deref() ?? null
     } else if (selector) {
         element = document.querySelector(selector)
     }
@@ -1947,7 +2268,7 @@ function extractAttribute(selector: string | null, refId: string | null, attribu
     // 特定属性使用 property 方式获取（运行时实际值，而非 HTML 初始值）
     const propertyAttributes = ['value', 'checked', 'selected', 'disabled', 'readOnly', 'indeterminate']
     if (propertyAttributes.includes(attribute)) {
-        const el = element as HTMLInputElement
+        const el        = element as HTMLInputElement
         const propValue = el[attribute as keyof HTMLInputElement]
         if (typeof propValue === 'boolean') {
             return {value: propValue ? 'true' : 'false'}
@@ -1967,9 +2288,9 @@ function findElements(
     refId: string
     tag: string
     text: string
-    rect: {x: number; y: number; width: number; height: number}
+    rect: { x: number; y: number; width: number; height: number }
 }> {
-    const win = window as Window & {
+    const win           = window as Window & {
         __mcpElementMap?: Record<string, WeakRef<Element>>
         __mcpRefCounter?: number
     }
@@ -1980,14 +2301,14 @@ function findElements(
         refId: string
         tag: string
         text: string
-        rect: {x: number; y: number; width: number; height: number}
+        rect: { x: number; y: number; width: number; height: number }
     }> = []
 
     let elements: Element[]
 
     if (xpath) {
         // XPath 查询
-        elements = []
+        elements          = []
         const xpathResult = document.evaluate(
             xpath,
             document,
@@ -2012,7 +2333,9 @@ function findElements(
     for (const element of elements) {
         if (text) {
             const elementText = element.textContent || ''
-            if (!elementText.includes(text)) continue
+            if (!elementText.includes(text)) {
+                continue
+            }
         }
 
         // 查找或创建 refId
@@ -2025,19 +2348,21 @@ function findElements(
         }
 
         if (!refId) {
-            refId = `ref_${++win.__mcpRefCounter!}`
+            refId                       = `ref_${++win.__mcpRefCounter!}`
             win.__mcpElementMap![refId] = new WeakRef(element)
         }
 
         const rect = element.getBoundingClientRect()
         results.push({
-            refId,
-            tag: element.tagName.toLowerCase(),
-            text: (element.textContent || '').trim().substring(0, 100),
-            rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
-        })
+                         refId,
+                         tag: element.tagName.toLowerCase(),
+                         text: (element.textContent || '').trim().substring(0, 100),
+                         rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
+                     })
 
-        if (results.length >= 50) break
+        if (results.length >= 50) {
+            break
+        }
     }
 
     // 清理失效引用，防止 key 泄漏
@@ -2053,13 +2378,13 @@ function findElements(
 // ==================== Stealth 模式注入函数 ====================
 
 // 模拟鼠标点击
-function simulateMouseClick(x: number, y: number, button: string): {success: boolean} {
+function simulateMouseClick(x: number, y: number, button: string): { success: boolean } {
     const element = document.elementFromPoint(x, y)
     if (!element) {
         return {success: false}
     }
 
-    const buttonCode = button === 'right' ? 2 : button === 'middle' ? 1 : 0
+    const buttonCode   = button === 'right' ? 2 : button === 'middle' ? 1 : 0
     const eventOptions = {
         bubbles: true,
         cancelable: true,
@@ -2069,7 +2394,7 @@ function simulateMouseClick(x: number, y: number, button: string): {success: boo
         screenX: x + window.screenX,
         screenY: y + window.screenY,
         button: buttonCode,
-        buttons: 1 << buttonCode,
+        buttons: 2 ** buttonCode,
     }
 
     element.dispatchEvent(new MouseEvent('mouseover', eventOptions))
@@ -2089,7 +2414,7 @@ function simulateMouseClick(x: number, y: number, button: string): {success: boo
 }
 
 // 模拟键盘输入
-function simulateKeyboardType(text: string, _delay: number): {success: boolean; error?: string} {
+function simulateKeyboardType(text: string, _delay: number): { success: boolean; error?: string } {
     const activeElement = document.activeElement as HTMLElement | null
 
     if (!activeElement) {
@@ -2145,7 +2470,7 @@ function simulateKeyboardType(text: string, _delay: number): {success: boolean; 
 }
 
 // 模拟单个按键事件
-function simulateKeyEvent(key: string, type: string, modifiers: string[]): {success: boolean} {
+function simulateKeyEvent(key: string, type: string, modifiers: string[]): { success: boolean } {
     const activeElement = document.activeElement || document.body
 
     const keyEventOptions: KeyboardEventInit = {
@@ -2174,8 +2499,8 @@ function simulateKeyEvent(key: string, type: string, modifiers: string[]): {succ
 }
 
 // 模拟鼠标事件
-function simulateMouseEvent(type: string, x: number, y: number, button: string): {success: boolean} {
-    const element = document.elementFromPoint(x, y) || document.body
+function simulateMouseEvent(type: string, x: number, y: number, button: string): { success: boolean } {
+    const element    = document.elementFromPoint(x, y) || document.body
     const buttonCode = button === 'right' ? 2 : button === 'middle' ? 1 : 0
 
     const eventOptions = {
@@ -2216,14 +2541,19 @@ function injectStealthScripts(): void {
     // 覆盖 navigator.plugins（模拟真实浏览器）
     Object.defineProperty(navigator, 'plugins', {
         get: () => {
-            const plugins = [
+            const plugins     = [
                 {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer'},
                 {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
                 {name: 'Native Client', filename: 'internal-nacl-plugin'},
             ]
-            const pluginArray = Object.create(PluginArray.prototype)
+            // 反检测需要使用已废弃的 PluginArray/Plugin API，通过 globalThis 间接访问避免 TS6385
+            const pluginArray = Object.create((globalThis as unknown as Record<string, {
+                prototype: object
+            }>).PluginArray.prototype)
             plugins.forEach((p, i) => {
-                const plugin = Object.create(Plugin.prototype)
+                const plugin = Object.create((globalThis as unknown as Record<string, {
+                    prototype: object
+                }>).Plugin.prototype)
                 Object.defineProperties(plugin, {
                     name: {value: p.name},
                     filename: {value: p.filename},
@@ -2245,12 +2575,12 @@ function injectStealthScripts(): void {
     })
 
     // 覆盖 chrome.runtime（隐藏扩展存在）
-    const originalChrome = (window as unknown as {chrome?: unknown}).chrome
+    const originalChrome = (window as unknown as { chrome?: unknown }).chrome
     if (originalChrome) {
         Object.defineProperty(window, 'chrome', {
             get: () => {
                 const chrome = {...originalChrome as object}
-                delete (chrome as {runtime?: unknown}).runtime
+                delete (chrome as { runtime?: unknown }).runtime
                 return chrome
             },
             configurable: true,
@@ -2258,10 +2588,9 @@ function injectStealthScripts(): void {
     }
 
     // 覆盖 Error.stack（移除扩展痕迹）
-    const originalError = Error
-    const ErrorProxy = new Proxy(originalError, {
+    ;(window as unknown as { Error: typeof Error }).Error = new Proxy(Error, {
         construct(target, args) {
-            const error = new target(...args)
+            const error         = new target(...args)
             const originalStack = error.stack
             if (originalStack) {
                 error.stack = originalStack
@@ -2272,11 +2601,10 @@ function injectStealthScripts(): void {
             return error
         },
     })
-    ;(window as unknown as {Error: typeof Error}).Error = ErrorProxy
 
     // 覆盖 Permissions API
     if (navigator.permissions) {
-        const originalQuery = navigator.permissions.query.bind(navigator.permissions)
+        const originalQuery         = navigator.permissions.query.bind(navigator.permissions)
         navigator.permissions.query = async (descriptor: PermissionDescriptor) => {
             if (descriptor.name === 'notifications') {
                 return {state: 'prompt', onchange: null} as PermissionStatus
@@ -2286,8 +2614,8 @@ function injectStealthScripts(): void {
     }
 
     // 覆盖 WebGL 渲染器信息
-    const originalGetParameter = WebGLRenderingContext.prototype.getParameter
-    WebGLRenderingContext.prototype.getParameter = function(parameter: number) {
+    const originalGetParameter                   = WebGLRenderingContext.prototype.getParameter
+    WebGLRenderingContext.prototype.getParameter = function (parameter: number) {
         if (parameter === 37445) {  // UNMASKED_VENDOR_WEBGL
             return 'Google Inc. (NVIDIA)'
         }

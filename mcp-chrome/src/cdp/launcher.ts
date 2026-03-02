@@ -9,7 +9,7 @@ import {existsSync, mkdirSync} from 'fs'
 import {homedir, platform} from 'os'
 import {join} from 'path'
 import {BrowserNotFoundError, TimeoutError} from '../core/errors.js'
-import type {LaunchOptions} from '../core/types.js'
+import {DEFAULT_TIMEOUT, type LaunchOptions} from '../core/types.js'
 
 /**
  * 默认 profile 目录（固定路径，保留 cookies 和登录状态）
@@ -64,16 +64,6 @@ export class BrowserLauncher {
         return this._port
     }
 
-    private _endpoint: string = ''
-
-    get endpoint(): string {
-        return this._endpoint
-    }
-
-    get isRunning(): boolean {
-        return this.process !== null && !this.process.killed
-    }
-
     /**
      * 启动浏览器
      */
@@ -84,7 +74,7 @@ export class BrowserLauncher {
                   incognito = false,
                   headless  = false,
                   userDataDir,
-                  timeout   = 30000,
+                  timeout   = DEFAULT_TIMEOUT,
               } = options
 
         // 查找 Chrome
@@ -103,8 +93,7 @@ export class BrowserLauncher {
         })
 
         // 等待 CDP 端点就绪
-        this._endpoint = await this.waitForEndpoint(timeout)
-        return this._endpoint
+        return this.waitForEndpoint(timeout)
     }
 
     /**
@@ -113,16 +102,6 @@ export class BrowserLauncher {
     close(): void {
         if (this.process && !this.process.killed) {
             this.process.kill('SIGTERM')
-            this.process = null
-        }
-    }
-
-    /**
-     * 强制关闭浏览器
-     */
-    forceClose(): void {
-        if (this.process && !this.process.killed) {
-            this.process.kill('SIGKILL')
             this.process = null
         }
     }
@@ -206,7 +185,7 @@ export class BrowserLauncher {
                 stderr += data.toString()
 
                 // 解析 DevTools listening on ws://...
-                const match = stderr.match(/DevTools listening on (ws:\/\/[^\s]+)/)
+                const match = stderr.match(/DevTools listening on (ws:\/\/\S+)/)
                 if (match) {
                     clearTimeout(timer)
                     // 解析端口

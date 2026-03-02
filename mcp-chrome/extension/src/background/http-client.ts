@@ -9,29 +9,29 @@
  * - 心跳检测（连接存活确认）
  */
 
-const EXTENSION_VERSION = '1.1.0'
-const PORT_RANGE_START = 19222
-const PORT_RANGE_END = 19299
+const EXTENSION_VERSION    = '1.2.0'
+const PORT_RANGE_START     = 19222
+const PORT_RANGE_END       = 19299
 const HEALTH_CHECK_TIMEOUT = 500
-const MAX_RECONNECT_DELAY = 30000
-const HEARTBEAT_TIMEOUT = 20000
+const MAX_RECONNECT_DELAY  = 30000
+const HEARTBEAT_TIMEOUT    = 20000
 
 interface ServerConnection {
     ws: WebSocket
     heartbeatTimer: ReturnType<typeof setTimeout> | null
 }
 
-type MessageHandler = (message: {id: string; action: string; params: unknown}, port: number) => void
+type MessageHandler = (message: { id: string; action: string; params: unknown }, port: number) => void
 type StatusHandler = (status: 'connected' | 'disconnected' | 'connecting', connectedCount: number) => void
 
 export class HttpClient {
-    private connections = new Map<number, ServerConnection>()
-    private messageHandler: MessageHandler | null = null
-    private statusHandler: StatusHandler | null = null
+    private connections                                          = new Map<number, ServerConnection>()
+    private messageHandler: MessageHandler | null                = null
+    private statusHandler: StatusHandler | null                  = null
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null
-    private reconnectAttempts = 0
-    private shouldReconnect = true
-    private connecting = false
+    private reconnectAttempts                                    = 0
+    private shouldReconnect                                      = true
+    private connecting                                           = false
 
     onMessage(handler: MessageHandler): void {
         this.messageHandler = handler
@@ -44,13 +44,13 @@ export class HttpClient {
     /**
      * 扫描所有端口，连接所有健康的 MCP Server（跳过已连接的）
      */
-    async connect(): Promise<{connected: number; ports: number[]}> {
+    async connect(): Promise<{ connected: number; ports: number[] }> {
         if (this.connecting) {
             return {connected: this.connections.size, ports: this.getConnectedPorts()}
         }
 
         this.stopReconnect()
-        this.connecting = true
+        this.connecting      = true
         this.shouldReconnect = true
 
         const wasConnected = this.connections.size > 0
@@ -70,8 +70,8 @@ export class HttpClient {
 
             // 连接所有尚未连接的健康端口
             const newPorts = healthyPorts.filter(p => !this.connections.has(p))
-            const results = await Promise.allSettled(
-                newPorts.map(port => this.connectToPort(port))
+            const results  = await Promise.allSettled(
+                newPorts.map(port => this.connectToPort(port)),
             )
 
             const successCount = results.filter(r => r.status === 'fulfilled' && r.value).length
@@ -92,6 +92,41 @@ export class HttpClient {
         }
     }
 
+    disconnect(): void {
+        this.shouldReconnect = false
+        this.stopReconnect()
+
+        for (const [port, conn] of this.connections) {
+            this.stopHeartbeat(port)
+            conn.ws.close()
+        }
+        this.connections.clear()
+        this.statusHandler?.('disconnected', 0)
+    }
+
+    isConnected(): boolean {
+        return this.connections.size > 0
+    }
+
+    getConnectedPorts(): number[] {
+        return Array.from(this.connections.keys()).sort((a, b) => a - b)
+    }
+
+    sendResponse(id: string, success: boolean, data?: unknown, error?: string, port?: number): void {
+        if (port === undefined) {
+            console.error('[HTTP] Cannot send response: no port specified')
+            return
+        }
+
+        const conn = this.connections.get(port)
+        if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
+            console.error(`[HTTP] Cannot send response to port ${port}: not connected`)
+            return
+        }
+
+        conn.ws.send(JSON.stringify({id, success, data, error}))
+    }
+
     private async connectToPort(port: number): Promise<boolean> {
         // 已连接则跳过
         if (this.connections.has(port)) {
@@ -101,7 +136,7 @@ export class HttpClient {
         return new Promise((resolve) => {
             try {
                 const url = `ws://127.0.0.1:${port}`
-                const ws = new WebSocket(url)
+                const ws  = new WebSocket(url)
 
                 const connectionTimeout = setTimeout(() => {
                     if (ws.readyState !== WebSocket.OPEN) {
@@ -154,7 +189,9 @@ export class HttpClient {
      */
     private removeConnection(port: number): void {
         const conn = this.connections.get(port)
-        if (!conn) return
+        if (!conn) {
+            return
+        }
 
         this.stopHeartbeat(port)
         this.connections.delete(port)
@@ -169,41 +206,6 @@ export class HttpClient {
         }
     }
 
-    disconnect(): void {
-        this.shouldReconnect = false
-        this.stopReconnect()
-
-        for (const [port, conn] of this.connections) {
-            this.stopHeartbeat(port)
-            conn.ws.close()
-        }
-        this.connections.clear()
-        this.statusHandler?.('disconnected', 0)
-    }
-
-    isConnected(): boolean {
-        return this.connections.size > 0
-    }
-
-    getConnectedPorts(): number[] {
-        return Array.from(this.connections.keys()).sort((a, b) => a - b)
-    }
-
-    sendResponse(id: string, success: boolean, data?: unknown, error?: string, port?: number): void {
-        if (port === undefined) {
-            console.error('[HTTP] Cannot send response: no port specified')
-            return
-        }
-
-        const conn = this.connections.get(port)
-        if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
-            console.error(`[HTTP] Cannot send response to port ${port}: not connected`)
-            return
-        }
-
-        conn.ws.send(JSON.stringify({id, success, data, error}))
-    }
-
     /**
      * 扫描端口范围，返回所有健康的 Server 端口
      */
@@ -215,14 +217,18 @@ export class HttpClient {
         for (let port = PORT_RANGE_START; port <= PORT_RANGE_END; port++) {
             checks.push(
                 this.checkPort(port).then(ok => {
-                    if (ok) healthyPorts.push(port)
-                })
+                    if (ok) {
+                        healthyPorts.push(port)
+                    }
+                }),
             )
         }
         await Promise.all(checks)
 
         if (healthyPorts.length > 0) {
-            console.log(`[HTTP] Found ${healthyPorts.length} MCP Server(s) at ports: ${healthyPorts.sort((a, b) => a - b).join(', ')}`)
+            console.log(`[HTTP] Found ${healthyPorts.length} MCP Server(s) at ports: ${healthyPorts.sort((a, b) => a -
+                                                                                                                   b)
+                                                                                                   .join(', ')}`)
         } else {
             console.log('[HTTP] No MCP Server found in port range')
         }
@@ -233,7 +239,7 @@ export class HttpClient {
     private async checkPort(port: number): Promise<boolean> {
         try {
             const controller = new AbortController()
-            const timeoutId = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT)
+            const timeoutId  = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT)
 
             const response = await fetch(`http://127.0.0.1:${port}/api/health`, {
                 signal: controller.signal,
@@ -274,7 +280,9 @@ export class HttpClient {
         this.stopHeartbeat(port)
 
         const conn = this.connections.get(port)
-        if (!conn) return
+        if (!conn) {
+            return
+        }
 
         conn.heartbeatTimer = setTimeout(() => {
             console.log(`[HTTP] Heartbeat timeout for port ${port}, closing connection`)

@@ -123,21 +123,4 @@ export class BehaviorSimulator {
         this.currentPosition = {...point}
     }
 
-    /**
-     * 生成人类化的鼠标移动路径
-     */
-    generateHumanMousePath(to: Point): Point[] {
-        return generateBezierPath(this.currentPosition, to)
-    }
-
-    /**
-     * 生成人类化的打字延迟序列
-     */
-    generateTypingDelays(textLength: number, baseDelay: number = 100): number[] {
-        const delays: number[] = []
-        for (let i = 0; i < textLength; i++) {
-            delays.push(getTypingDelay(baseDelay))
-        }
-        return delays
-    }
 }

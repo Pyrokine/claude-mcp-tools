@@ -11,6 +11,7 @@
 
 import type {CDPClient} from '../cdp/client.js'
 import {withRetry} from './retry.js'
+import {DEFAULT_TIMEOUT} from './types.js'
 
 /**
  * AutoWait 选项
@@ -20,14 +21,12 @@ export interface AutoWaitOptions {
     timeout?: number;
 }
 
-const DEFAULT_TIMEOUT = 30000
-
 /**
  * 自动等待类
  */
 export class AutoWait {
-    private timeout: number
-    private deadline: number
+    private readonly timeout: number
+    private readonly deadline: number
 
     constructor(
         private cdp: CDPClient,

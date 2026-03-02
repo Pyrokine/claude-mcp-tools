@@ -25,7 +25,7 @@ export abstract class BrowserError extends Error {
     abstract readonly suggestion: string
     readonly context: ErrorContext = {}
 
-    constructor(message: string) {
+    protected constructor(message: string) {
         super(message)
         this.name = this.constructor.name
     }
@@ -33,6 +33,7 @@ export abstract class BrowserError extends Error {
     /**
      * 转换为 JSON 格式，用于 MCP 响应
      */
+    // noinspection JSUnusedGlobalSymbols — 被 formatErrorResponse 动态调用
     toJSON(): object {
         const result: {
             error: {
@@ -181,19 +182,6 @@ export class TimeoutError extends BrowserError {
 }
 
 /**
- * 无效参数错误
- */
-export class InvalidArgumentError extends BrowserError {
-    readonly code = 'INVALID_ARGUMENT'
-    readonly suggestion: string
-
-    constructor(message: string, suggestion?: string) {
-        super(message)
-        this.suggestion = suggestion ?? '请检查参数是否正确'
-    }
-}
-
-/**
  * CDP 协议错误
  */
 export class CDPError extends BrowserError {
@@ -203,20 +191,6 @@ export class CDPError extends BrowserError {
     constructor(message: string) {
         super(message)
     }
-}
-
-/**
- * 格式化日志记录（参考 Playwright Waiter）
- */
-export function formatLogRecording(logs: string[]): string {
-    if (logs.length === 0) {
-        return ''
-    }
-    const header   = ' logs '
-    const width    = 60
-    const leftPad  = '='.repeat(Math.floor((width - header.length) / 2))
-    const rightPad = '='.repeat(width - header.length - leftPad.length)
-    return `\n${leftPad}${header}${rightPad}\n${logs.join('\n')}\n${'='.repeat(width)}`
 }
 
 /**
@@ -246,8 +220,17 @@ function isZodError(error: unknown): error is Error & { issues: ZodIssue[] } {
  * 检测错误是否可能由 tab 不在前台导致
  */
 function detectVisibilityHint(errorMessage: string): string | null {
-    const msg = errorMessage.toLowerCase()
-    const keywords = ['hidden', 'visible', 'visibility', 'focus', 'blur', 'active tab', 'not active', 'capturevisibletab']
+    const msg      = errorMessage.toLowerCase()
+    const keywords = [
+        'hidden',
+        'visible',
+        'visibility',
+        'focus',
+        'blur',
+        'active tab',
+        'not active',
+        'capturevisibletab',
+    ]
     if (keywords.some(kw => msg.includes(kw))) {
         return '此操作可能需要 tab 在前台。请使用 browse(action="attach", targetId="<id>", activate=true) 激活目标 tab'
     }
@@ -292,7 +275,7 @@ export function formatErrorResponse(error: unknown): {
     }
 
     // 处理 BrowserError（带 toJSON 方法）
-    const err = error as Error & { toJSON?: () => object }
+    const err       = error as Error & { toJSON?: () => object }
     const errorJson = err.toJSON?.() ?? {
         error: {
             code: 'UNKNOWN_ERROR',
@@ -302,7 +285,7 @@ export function formatErrorResponse(error: unknown): {
 
     // 检测 visibility 相关错误，添加 hint
     const errorMessage = err.message ?? String(error)
-    const hint = detectVisibilityHint(errorMessage)
+    const hint         = detectVisibilityHint(errorMessage)
     if (hint) {
         (errorJson as Record<string, unknown>).hint = hint
     }
@@ -315,5 +298,16 @@ export function formatErrorResponse(error: unknown): {
             },
         ],
         isError: true,
+    }
+}
+
+/**
+ * 格式化成功响应为 MCP 工具响应
+ */
+export function formatResponse(data: unknown): {
+    content: Array<{ type: 'text'; text: string }>;
+} {
+    return {
+        content: [{type: 'text', text: JSON.stringify(data, null, 2)}],
     }
 }

@@ -8,6 +8,7 @@
 import {EventEmitter} from 'events'
 import WebSocket from 'ws'
 import {CDPError, ConnectionRefusedError, TimeoutError} from '../core/errors.js'
+import {DEFAULT_TIMEOUT} from '../core/types.js'
 
 /**
  * CDP 消息回调
@@ -38,18 +39,12 @@ type CDPEventListener = (params: unknown) => void;
  */
 export class CDPClient extends EventEmitter {
     /** 默认命令超时 */
-    private static readonly DEFAULT_COMMAND_TIMEOUT = 30000
-    private ws: WebSocket | null = null
-    private callbacks            = new Map<number, PendingCallback>()
-    private nextId               = 1
-    private eventListeners       = new Map<string, Set<CDPEventListener>>()
-    private activeEventWaiters   = new Set<EventWaiter>()
-
-    private _endpoint: string    = ''
-
-    get endpoint(): string {
-        return this._endpoint
-    }
+    private static readonly DEFAULT_COMMAND_TIMEOUT = DEFAULT_TIMEOUT
+    private ws: WebSocket | null                    = null
+    private callbacks                               = new Map<number, PendingCallback>()
+    private nextId                                  = 1
+    private eventListeners                          = new Map<string, Set<CDPEventListener>>()
+    private activeEventWaiters                      = new Set<EventWaiter>()
 
     get isConnected(): boolean {
         return this.ws !== null && this.ws.readyState === WebSocket.OPEN
@@ -58,9 +53,7 @@ export class CDPClient extends EventEmitter {
     /**
      * 连接到 CDP 端点
      */
-    async connect(endpoint: string, timeout = 30000): Promise<void> {
-        this._endpoint = endpoint
-
+    async connect(endpoint: string, timeout = DEFAULT_TIMEOUT): Promise<void> {
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 reject(new TimeoutError(`连接超时: ${endpoint} (${timeout}ms)`))
@@ -152,7 +145,9 @@ export class CDPClient extends EventEmitter {
             } catch (err) {
                 clearTimeout(timeoutId)
                 this.callbacks.delete(id)
-                reject(new CDPError(`Failed to send CDP command ${method}: ${err instanceof Error ? err.message : 'Unknown error'}`))
+                reject(new CDPError(`Failed to send CDP command ${method}: ${err instanceof Error ?
+                                                                             err.message :
+                                                                             'Unknown error'}`))
             }
         })
     }
@@ -185,7 +180,7 @@ export class CDPClient extends EventEmitter {
     waitForEvent<T = unknown>(
         event: string,
         predicate?: (params: T) => boolean,
-        timeout = 30000,
+        timeout = DEFAULT_TIMEOUT,
     ): Promise<T> {
         return new Promise((resolve, reject) => {
             const listener: CDPEventListener = (params) => {
@@ -307,13 +302,45 @@ export class CDPClient extends EventEmitter {
      * 处理连接关闭
      */
     private handleClose(): void {
+        if (this.ws === null) {
+            return
+        }
+        this.ws = null
         this.rejectAllPending('连接已关闭')
+        this.eventListeners.clear()
         this.emit('disconnected')
     }
 }
 
 /** 默认 HTTP 请求超时 */
 const DEFAULT_HTTP_TIMEOUT = 10000
+
+/**
+ * 请求 CDP HTTP 接口（公共逻辑）
+ */
+async function cdpHttpFetch<T>(host: string, port: number, path: string, timeout: number): Promise<T> {
+    // noinspection HttpUrlsUsage — CDP 调试协议只支持 HTTP
+    const url        = `http://${host}:${port}${path}`
+    const controller = new AbortController()
+    const timeoutId  = setTimeout(() => controller.abort(), timeout)
+
+    let response: Response
+    try {
+        response = await fetch(url, {signal: controller.signal})
+    } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+            throw new TimeoutError(`连接超时: ${host}:${port} (${timeout}ms)`)
+        }
+        throw new ConnectionRefusedError(host, port)
+    } finally {
+        clearTimeout(timeoutId)
+    }
+
+    if (!response.ok) {
+        throw new ConnectionRefusedError(host, port)
+    }
+    return (await response.json()) as T
+}
 
 /**
  * 获取浏览器 WebSocket 端点
@@ -323,30 +350,8 @@ export async function getBrowserWSEndpoint(
     port: number,
     timeout: number = DEFAULT_HTTP_TIMEOUT,
 ): Promise<string> {
-    const url        = `http://${host}:${port}/json/version`
-    const controller = new AbortController()
-    const timeoutId  = setTimeout(() => controller.abort(), timeout)
-
-    try {
-        const response = await fetch(url, {signal: controller.signal})
-
-        if (!response.ok) {
-            throw new ConnectionRefusedError(host, port)
-        }
-        const data = (await response.json()) as { webSocketDebuggerUrl: string }
-        return data.webSocketDebuggerUrl
-    } catch (error) {
-        if (error instanceof ConnectionRefusedError) {
-            throw error
-        }
-        // AbortError 表示超时
-        if (error instanceof Error && error.name === 'AbortError') {
-            throw new TimeoutError(`连接超时: ${host}:${port} (${timeout}ms)`)
-        }
-        throw new ConnectionRefusedError(host, port)
-    } finally {
-        clearTimeout(timeoutId)
-    }
+    const data = await cdpHttpFetch<{ webSocketDebuggerUrl: string }>(host, port, '/json/version', timeout)
+    return data.webSocketDebuggerUrl
 }
 
 /**
@@ -356,43 +361,6 @@ export async function getTargets(
     host: string,
     port: number,
     timeout: number = DEFAULT_HTTP_TIMEOUT,
-): Promise<
-    Array<{
-        id: string;
-        type: string;
-        url: string;
-        title: string;
-        webSocketDebuggerUrl: string;
-    }>
-> {
-    const url        = `http://${host}:${port}/json/list`
-    const controller = new AbortController()
-    const timeoutId  = setTimeout(() => controller.abort(), timeout)
-
-    try {
-        const response = await fetch(url, {signal: controller.signal})
-
-        if (!response.ok) {
-            throw new ConnectionRefusedError(host, port)
-        }
-        return (await response.json()) as Array<{
-            id: string;
-            type: string;
-            url: string;
-            title: string;
-            webSocketDebuggerUrl: string;
-        }>
-    } catch (error) {
-        if (error instanceof ConnectionRefusedError) {
-            throw error
-        }
-        // AbortError 表示超时
-        if (error instanceof Error && error.name === 'AbortError') {
-            throw new TimeoutError(`连接超时: ${host}:${port} (${timeout}ms)`)
-        }
-        throw new ConnectionRefusedError(host, port)
-    } finally {
-        clearTimeout(timeoutId)
-    }
+): Promise<Array<{ id: string; type: string; url: string; title: string; webSocketDebuggerUrl: string }>> {
+    return cdpHttpFetch(host, port, '/json/list', timeout)
 }
-

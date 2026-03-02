@@ -6,6 +6,14 @@
  * - Target 对象统一元素定位方式
  */
 
+/** 全局默认超时（毫秒） */
+export const DEFAULT_TIMEOUT = 30000
+
+/** 修饰键位掩码（CDP Input.dispatchKeyEvent/MouseEvent 的 modifiers 字段） */
+export const MODIFIER_KEYS: Record<string, number> = {
+    Alt: 1, Control: 2, Meta: 4, Shift: 8,
+}
+
 /**
  * 统一的元素定位目标
  *

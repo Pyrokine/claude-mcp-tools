@@ -1,198 +1,263 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang='zh'>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset='UTF-8'>
+    <meta content='width=device-width, initial-scale=1.0' name='viewport'>
     <title>MCP Chrome 测试页面</title>
     <style>
-        body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
-        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
-        h2 { color: #333; margin-top: 0; }
-        button { padding: 8px 16px; margin: 5px; cursor: pointer; }
-        input, textarea { padding: 8px; margin: 5px; width: 200px; }
-        .log-area { background: #f5f5f5; padding: 10px; min-height: 100px; font-family: monospace; font-size: 12px; }
-        [data-testid] { border: 2px dashed #007bff; }
-        #drag-source { width: 100px; height: 100px; background: #4CAF50; color: white; display: flex; align-items: center; justify-content: center; cursor: move; }
-        #drop-target { width: 150px; height: 100px; background: #f0f0f0; border: 2px dashed #999; display: flex; align-items: center; justify-content: center; }
-        .key-display { font-size: 24px; padding: 20px; background: #333; color: #0f0; font-family: monospace; min-height: 50px; }
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+
+        h2 {
+            color: #333;
+            margin-top: 0;
+        }
+
+        button {
+            padding: 8px 16px;
+            margin: 5px;
+            cursor: pointer;
+        }
+
+        input, textarea {
+            padding: 8px;
+            margin: 5px;
+            width: 200px;
+        }
+
+        .log-area {
+            background: #f5f5f5;
+            padding: 10px;
+            min-height: 100px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        [data-testid] {
+            border: 2px dashed #007bff;
+        }
+
+        #drag-source {
+            width: 100px;
+            height: 100px;
+            background: #4CAF50;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: move;
+        }
+
+        #drop-target {
+            width: 150px;
+            height: 100px;
+            background: #f0f0f0;
+            border: 2px dashed #999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .key-display {
+            font-size: 24px;
+            padding: 20px;
+            background: #333;
+            color: #0f0;
+            font-family: monospace;
+            min-height: 50px;
+        }
     </style>
 </head>
 <body>
-    <h1>MCP Chrome 测试页面</h1>
+<h1>MCP Chrome 测试页面</h1>
 
-    <!-- 基础元素定位测试 -->
-    <div class="section">
-        <h2>1. 元素定位测试</h2>
-        <button id="btn-id">ID 定位按钮</button>
-        <button class="btn-class">Class 定位按钮</button>
-        <button data-testid="test-button">TestId 定位按钮</button>
-        <button role="button" aria-label="accessible-button">ARIA 按钮</button>
-        <input type="text" placeholder="placeholder 输入框" id="input-placeholder">
-        <input type="text" title="title 输入框" id="input-title">
-        <a href="#link-test">文本链接测试</a>
+<!-- 基础元素定位测试 -->
+<div class='section'>
+    <h2>1. 元素定位测试</h2>
+    <button id='btn-id'>ID 定位按钮</button>
+    <button class='btn-class'>Class 定位按钮</button>
+    <button data-testid='test-button'>TestId 定位按钮</button>
+    <button aria-label='accessible-button' role='button'>ARIA 按钮</button>
+    <input id='input-placeholder' placeholder='placeholder 输入框' type='text'>
+    <input id='input-title' title='title 输入框' type='text'>
+    <a href='#link-test'>文本链接测试</a>
+</div>
+
+<!-- 输入测试 -->
+<div class='section'>
+    <h2>2. 输入测试</h2>
+    <label for='text-input'>文本输入:</label>
+    <input id='text-input' placeholder='在这里输入' type='text'>
+    <textarea id='textarea' placeholder='多行文本'></textarea>
+    <div id='input-result'></div>
+</div>
+
+<!-- 键盘事件测试 -->
+<div class='section'>
+    <h2>3. 键盘事件测试</h2>
+    <p>按下任意键查看事件:</p>
+    <div class='key-display' id='key-display' tabindex='0'>点击此处后按键</div>
+    <div class='log-area' id='key-log'></div>
+</div>
+
+<!-- 鼠标事件测试 -->
+<div class='section'>
+    <h2>4. 鼠标事件测试</h2>
+    <button id='click-test'>单击测试</button>
+    <button id='dblclick-test'>双击测试</button>
+    <button id='contextmenu-test'>右键测试</button>
+    <div class='log-area' id='mouse-log'></div>
+</div>
+
+<!-- 拖拽测试 -->
+<div class='section'>
+    <h2>5. 拖拽测试</h2>
+    <div style='display: flex; gap: 20px; align-items: center;'>
+        <div draggable='true' id='drag-source'>拖拽我</div>
+        <span>→</span>
+        <div id='drop-target'>放到这里</div>
     </div>
+    <div class='log-area' id='drag-log'></div>
+</div>
 
-    <!-- 输入测试 -->
-    <div class="section">
-        <h2>2. 输入测试</h2>
-        <label for="text-input">文本输入:</label>
-        <input type="text" id="text-input" placeholder="在这里输入">
-        <textarea id="textarea" placeholder="多行文本"></textarea>
-        <div id="input-result"></div>
-    </div>
-
-    <!-- 键盘事件测试 -->
-    <div class="section">
-        <h2>3. 键盘事件测试</h2>
-        <p>按下任意键查看事件:</p>
-        <div class="key-display" id="key-display" tabindex="0">点击此处后按键</div>
-        <div id="key-log" class="log-area"></div>
-    </div>
-
-    <!-- 鼠标事件测试 -->
-    <div class="section">
-        <h2>4. 鼠标事件测试</h2>
-        <button id="click-test">单击测试</button>
-        <button id="dblclick-test">双击测试</button>
-        <button id="contextmenu-test">右键测试</button>
-        <div id="mouse-log" class="log-area"></div>
-    </div>
-
-    <!-- 拖拽测试 -->
-    <div class="section">
-        <h2>5. 拖拽测试</h2>
-        <div style="display: flex; gap: 20px; align-items: center;">
-            <div id="drag-source" draggable="true">拖拽我</div>
-            <span>→</span>
-            <div id="drop-target">放到这里</div>
+<!-- 滚动测试 -->
+<div class='section'>
+    <h2>6. 滚动测试</h2>
+    <div id='scroll-container' style='height: 150px; overflow-y: scroll; border: 1px solid #ccc;'>
+        <div style='height: 500px; padding: 10px;'>
+            <p>滚动内容顶部</p>
+            <p id='scroll-middle' style='margin-top: 200px;'>滚动内容中间</p>
+            <p id='scroll-bottom' style='margin-top: 200px;'>滚动内容底部</p>
         </div>
-        <div id="drag-log" class="log-area"></div>
     </div>
+    <div class='log-area' id='scroll-log'></div>
+</div>
 
-    <!-- 滚动测试 -->
-    <div class="section">
-        <h2>6. 滚动测试</h2>
-        <div id="scroll-container" style="height: 150px; overflow-y: scroll; border: 1px solid #ccc;">
-            <div style="height: 500px; padding: 10px;">
-                <p>滚动内容顶部</p>
-                <p style="margin-top: 200px;" id="scroll-middle">滚动内容中间</p>
-                <p style="margin-top: 200px;" id="scroll-bottom">滚动内容底部</p>
-            </div>
-        </div>
-        <div id="scroll-log" class="log-area"></div>
-    </div>
+<!-- Console 输出测试 -->
+<div class='section'>
+    <h2>7. Console 输出测试</h2>
+    <button id='log-info' onclick="console.log('[MCP-TEST] Info message')">输出 Info</button>
+    <button id='log-warn' onclick="console.warn('[MCP-TEST] Warning message')">输出 Warning</button>
+    <button id='log-error' onclick="console.error('[MCP-TEST] Error message')">输出 Error</button>
+    <button id='log-custom' onclick='logCustom()'>输出自定义</button>
+</div>
 
-    <!-- Console 输出测试 -->
-    <div class="section">
-        <h2>7. Console 输出测试</h2>
-        <button id="log-info" onclick="console.log('[MCP-TEST] Info message')">输出 Info</button>
-        <button id="log-warn" onclick="console.warn('[MCP-TEST] Warning message')">输出 Warning</button>
-        <button id="log-error" onclick="console.error('[MCP-TEST] Error message')">输出 Error</button>
-        <button id="log-custom" onclick="logCustom()">输出自定义</button>
-    </div>
+<!-- 属性提取测试 -->
+<div class='section'>
+    <h2>8. 属性提取测试</h2>
+    <img alt='测试图片'
+         data-custom='custom-value'
+         id='test-image'
+         src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><rect fill='%2300f' width='100' height='100'/></svg>"
+         title='图片标题'>
+    <a href='https://example.com' id='test-link' rel='noopener' target='_blank'>测试链接</a>
+</div>
 
-    <!-- 属性提取测试 -->
-    <div class="section">
-        <h2>8. 属性提取测试</h2>
-        <img id="test-image" src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><rect fill='%2300f' width='100' height='100'/></svg>"
-             alt="测试图片"
-             title="图片标题"
-             data-custom="custom-value">
-        <a id="test-link" href="https://example.com" target="_blank" rel="noopener">测试链接</a>
-    </div>
+<script>
+    // 输入监听
+    document.getElementById('text-input').addEventListener('input', function (e) {
+        document.getElementById('input-result').textContent = '输入内容: ' + e.target.value;
+        console.log('[MCP-TEST] Input changed:', e.target.value);
+    });
 
-    <script>
-        // 输入监听
-        document.getElementById('text-input').addEventListener('input', function(e) {
-            document.getElementById('input-result').textContent = '输入内容: ' + e.target.value;
-            console.log('[MCP-TEST] Input changed:', e.target.value);
-        });
+    // 键盘事件
+    const keyDisplay = document.getElementById('key-display');
+    const keyLog = document.getElementById('key-log');
 
-        // 键盘事件
-        const keyDisplay = document.getElementById('key-display');
-        const keyLog = document.getElementById('key-log');
-
-        ['keydown', 'keyup', 'keypress'].forEach(eventType => {
-            keyDisplay.addEventListener(eventType, function(e) {
-                const info = `${eventType}: key="${e.key}" code="${e.code}" ctrl=${e.ctrlKey} shift=${e.shiftKey} alt=${e.altKey} meta=${e.metaKey}`;
-                keyDisplay.textContent = e.key || e.code;
-                keyLog.innerHTML = info + '<br>' + keyLog.innerHTML;
-                console.log('[MCP-TEST]', info);
-                if (eventType === 'keydown') e.preventDefault();
-            });
-        });
-
-        // 鼠标事件
-        const mouseLog = document.getElementById('mouse-log');
-
-        document.getElementById('click-test').addEventListener('click', function(e) {
-            const info = `click: button=${e.button} x=${e.clientX} y=${e.clientY}`;
-            mouseLog.innerHTML = info + '<br>' + mouseLog.innerHTML;
+    ['keydown', 'keyup', 'keypress'].forEach(eventType => {
+        keyDisplay.addEventListener(eventType, function (e) {
+            const info = `${eventType}: key="${e.key}" code="${e.code}" ctrl=${e.ctrlKey} shift=${e.shiftKey} alt=${e.altKey} meta=${e.metaKey}`;
+            keyDisplay.textContent = e.key || e.code;
+            keyLog.innerHTML = info + '<br>' + keyLog.innerHTML;
             console.log('[MCP-TEST]', info);
+            if (eventType === 'keydown') {
+                e.preventDefault();
+            }
         });
+    });
 
-        document.getElementById('dblclick-test').addEventListener('dblclick', function(e) {
-            const info = `dblclick: x=${e.clientX} y=${e.clientY}`;
-            mouseLog.innerHTML = info + '<br>' + mouseLog.innerHTML;
-            console.log('[MCP-TEST]', info);
+    // 鼠标事件
+    const mouseLog = document.getElementById('mouse-log');
+
+    document.getElementById('click-test').addEventListener('click', function (e) {
+        const info = `click: button=${e.button} x=${e.clientX} y=${e.clientY}`;
+        mouseLog.innerHTML = info + '<br>' + mouseLog.innerHTML;
+        console.log('[MCP-TEST]', info);
+    });
+
+    document.getElementById('dblclick-test').addEventListener('dblclick', function (e) {
+        const info = `dblclick: x=${e.clientX} y=${e.clientY}`;
+        mouseLog.innerHTML = info + '<br>' + mouseLog.innerHTML;
+        console.log('[MCP-TEST]', info);
+    });
+
+    document.getElementById('contextmenu-test').addEventListener('contextmenu', function (e) {
+        e.preventDefault();
+        const info = `contextmenu (right-click): x=${e.clientX} y=${e.clientY}`;
+        mouseLog.innerHTML = info + '<br>' + mouseLog.innerHTML;
+        console.log('[MCP-TEST]', info);
+    });
+
+    // 拖拽事件
+    const dragSource = document.getElementById('drag-source');
+    const dropTarget = document.getElementById('drop-target');
+    const dragLog = document.getElementById('drag-log');
+
+    dragSource.addEventListener('dragstart', function (e) {
+        dragLog.innerHTML = 'dragstart<br>' + dragLog.innerHTML;
+        console.log('[MCP-TEST] dragstart');
+        e.dataTransfer.setData('text/plain', 'dragged');
+    });
+
+    dropTarget.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        dropTarget.style.background = '#c8e6c9';
+    });
+
+    dropTarget.addEventListener('dragleave', function () {
+        dropTarget.style.background = '#f0f0f0';
+    });
+
+    dropTarget.addEventListener('drop', function (e) {
+        e.preventDefault();
+        dropTarget.style.background = '#4CAF50';
+        dropTarget.textContent = '已放置!';
+        dragLog.innerHTML = 'drop - 成功!<br>' + dragLog.innerHTML;
+        console.log('[MCP-TEST] drop - success');
+    });
+
+    // 滚动事件
+    const scrollContainer = document.getElementById('scroll-container');
+    const scrollLog = document.getElementById('scroll-log');
+
+    scrollContainer.addEventListener('scroll', function () {
+        const info = `scroll: scrollTop=${scrollContainer.scrollTop}`;
+        scrollLog.innerHTML = info;
+        console.log('[MCP-TEST]', info);
+    });
+
+    // 自定义日志
+    function logCustom() {
+        const timestamp = new Date().toISOString();
+        console.log('[MCP-TEST] Custom log at', timestamp, {
+            test: true,
+            nested: {value: 42},
         });
+    }
 
-        document.getElementById('contextmenu-test').addEventListener('contextmenu', function(e) {
-            e.preventDefault();
-            const info = `contextmenu (right-click): x=${e.clientX} y=${e.clientY}`;
-            mouseLog.innerHTML = info + '<br>' + mouseLog.innerHTML;
-            console.log('[MCP-TEST]', info);
-        });
-
-        // 拖拽事件
-        const dragSource = document.getElementById('drag-source');
-        const dropTarget = document.getElementById('drop-target');
-        const dragLog = document.getElementById('drag-log');
-
-        dragSource.addEventListener('dragstart', function(e) {
-            dragLog.innerHTML = 'dragstart<br>' + dragLog.innerHTML;
-            console.log('[MCP-TEST] dragstart');
-            e.dataTransfer.setData('text/plain', 'dragged');
-        });
-
-        dropTarget.addEventListener('dragover', function(e) {
-            e.preventDefault();
-            dropTarget.style.background = '#c8e6c9';
-        });
-
-        dropTarget.addEventListener('dragleave', function() {
-            dropTarget.style.background = '#f0f0f0';
-        });
-
-        dropTarget.addEventListener('drop', function(e) {
-            e.preventDefault();
-            dropTarget.style.background = '#4CAF50';
-            dropTarget.textContent = '已放置!';
-            dragLog.innerHTML = 'drop - 成功!<br>' + dragLog.innerHTML;
-            console.log('[MCP-TEST] drop - success');
-        });
-
-        // 滚动事件
-        const scrollContainer = document.getElementById('scroll-container');
-        const scrollLog = document.getElementById('scroll-log');
-
-        scrollContainer.addEventListener('scroll', function() {
-            const info = `scroll: scrollTop=${scrollContainer.scrollTop}`;
-            scrollLog.innerHTML = info;
-            console.log('[MCP-TEST]', info);
-        });
-
-        // 自定义日志
-        function logCustom() {
-            const timestamp = new Date().toISOString();
-            console.log('[MCP-TEST] Custom log at', timestamp, {
-                test: true,
-                nested: { value: 42 }
-            });
-        }
-
-        // 页面加载完成
-        console.log('[MCP-TEST] Test page loaded successfully');
-    </script>
+    // 页面加载完成
+    console.log('[MCP-TEST] Test page loaded successfully');
+</script>
 </body>
 </html>

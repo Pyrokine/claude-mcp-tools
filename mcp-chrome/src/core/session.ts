@@ -13,17 +13,19 @@ import {BrowserLauncher, CDPClient, getBrowserWSEndpoint, getTargets} from '../c
 import {AutoWait} from './auto-wait.js'
 import {NavigationTimeoutError, SessionNotFoundError, TargetNotFoundError} from './errors.js'
 import {Locator} from './locator.js'
-import type {
-    ConnectOptions,
-    ConsoleLogEntry,
-    Cookie,
-    CookieOptions,
-    LaunchOptions,
-    NetworkRequestEntry,
-    PageState,
-    Target,
-    TargetInfo,
-    WaitUntil,
+import {
+    type ConnectOptions,
+    type ConsoleLogEntry,
+    type Cookie,
+    type CookieOptions,
+    DEFAULT_TIMEOUT,
+    type LaunchOptions,
+    MODIFIER_KEYS,
+    type NetworkRequestEntry,
+    type PageState,
+    type Target,
+    type TargetInfo,
+    type WaitUntil,
 } from './types.js'
 
 /**
@@ -41,7 +43,7 @@ interface SessionState {
 class SessionManager {
     private static instance: SessionManager
     // 日志收集（环形缓冲区，限制最大条数避免内存泄漏）
-    private static readonly MAX_LOG_ENTRIES        = 1000
+    private static readonly MAX_LOG_ENTRIES            = 1000
     private launcher: BrowserLauncher | null           = null
     private cdp: CDPClient | null                      = null
     private connectedPort: number                      = 0
@@ -50,11 +52,13 @@ class SessionManager {
     private state: SessionState | null                 = null
     private behaviorSimulator                          = new BehaviorSimulator()
     private stealthMode: 'off' | 'safe' | 'aggressive' = 'safe'
+    /** 当前按下的修饰键位掩码 */
+    private modifiers                                  = 0
     // 操作锁（防止并发竞态）
-    private operationLock: Promise<void> = Promise.resolve()
-    private consoleLogs: ConsoleLogEntry[]         = []
-    private networkRequests: NetworkRequestEntry[] = []
-    private requestMap                             = new Map<string, {
+    private operationLock: Promise<void>               = Promise.resolve()
+    private consoleLogs: ConsoleLogEntry[]             = []
+    private networkRequests: NetworkRequestEntry[]     = []
+    private requestMap                                 = new Map<string, {
         url: string;
         method: string;
         type: string;
@@ -67,18 +71,18 @@ class SessionManager {
     private constructor() {
     }
 
-    static getInstance(): SessionManager {
-        if (!SessionManager.instance) {
-            SessionManager.instance = new SessionManager()
-        }
-        return SessionManager.instance
-    }
-
     /**
      * 获取当前调试端口
      */
     get port(): number | null {
         return this.launcher?.port ?? (this.connectedPort || null)
+    }
+
+    static getInstance(): SessionManager {
+        if (!SessionManager.instance) {
+            SessionManager.instance = new SessionManager()
+        }
+        return SessionManager.instance
     }
 
     /**
@@ -104,7 +108,7 @@ class SessionManager {
                     this.connectedPort = port
 
                     // 获取现有页面
-                    const targets    = await getTargets('127.0.0.1', port)
+                    const targets  = await getTargets('127.0.0.1', port)
                     let pageTarget = targets.find((t) => t.type === 'page')
 
                     // 如果没有页面或 attach 失败，创建新 tab
@@ -177,7 +181,7 @@ class SessionManager {
      */
     async connect(options: ConnectOptions): Promise<TargetInfo> {
         return this.withLock(async () => {
-            const {host = '127.0.0.1', port, timeout = 30000, stealth = 'safe'} = options
+            const {host = '127.0.0.1', port, timeout = DEFAULT_TIMEOUT, stealth = 'safe'} = options
 
             // 关闭现有会话
             this.resetState()
@@ -191,6 +195,7 @@ class SessionManager {
             // 连接 CDP
             this.cdp = new CDPClient()
             await this.cdp.connect(endpoint, timeout)
+            this.connectedPort = port
 
             // 获取第一个页面
             const targets    = await getTargets(host, port)
@@ -246,41 +251,6 @@ class SessionManager {
     }
 
     /**
-     * 附加到指定页面（内部版本，不加锁，供 launch/connect 等已持锁方法调用）
-     */
-    private async attachToTargetInternal(targetId: string): Promise<void> {
-        this.ensureConnected()
-
-        // 如果已经附加到同一个 target，跳过
-        if (this.currentTargetId === targetId && this.sessionId) {
-            return
-        }
-
-        // 如果有之前的 session，先分离
-        if (this.sessionId) {
-            try {
-                await this.cdp!.send('Target.detachFromTarget', {
-                    sessionId: this.sessionId,
-                })
-            } catch {
-                // 忽略分离错误
-            }
-        }
-
-        // 附加到目标
-        const {sessionId} = (await this.cdp!.send('Target.attachToTarget', {
-            targetId,
-            flatten: true,
-        })) as { sessionId: string }
-
-        this.sessionId       = sessionId
-        this.currentTargetId = targetId
-
-        // 初始化会话
-        await this.initSession()
-    }
-
-    /**
      * 导航到 URL
      */
     async navigate(
@@ -290,7 +260,7 @@ class SessionManager {
         return this.withLock(async () => {
             this.ensureSession()
 
-            const {wait = 'load', timeout = 30000} = options
+            const {wait = 'load', timeout = DEFAULT_TIMEOUT} = options
 
             // 导航（传 timeout 防止 CDP 默认 30s 截断用户预算）
             const {errorText} = (await this.send('Page.navigate', {url}, timeout)) as {
@@ -401,7 +371,7 @@ class SessionManager {
     /**
      * 等待导航完成（跨文档导航或同文档导航）
      */
-    async waitForNavigation(timeout: number = 30000): Promise<void> {
+    async waitForNavigation(timeout: number = DEFAULT_TIMEOUT): Promise<void> {
         this.ensureSession()
         await this.waitForAnyEvent(
             ['Page.loadEventFired', 'Page.navigatedWithinDocument'],
@@ -412,12 +382,12 @@ class SessionManager {
     /**
      * 后退
      */
-    async goBack(timeout = 30000): Promise<{navigated: boolean}> {
+    async goBack(timeout = DEFAULT_TIMEOUT): Promise<{ navigated: boolean }> {
         return this.withLock(async () => {
             this.ensureSession()
             const {currentIndex, entries} = await this.send<{
                 currentIndex: number
-                entries: Array<{id: number; url: string; title: string}>
+                entries: Array<{ id: number; url: string; title: string }>
             }>('Page.getNavigationHistory', undefined, timeout)
 
             if (currentIndex <= 0) {
@@ -431,7 +401,8 @@ class SessionManager {
             )
             // 预注册 rejection handler：若 send() 抛错导致 waitPromise 永远不被 await，
             // 其 timer reject 不会成为 unhandled rejection（Node 20 默认会退出进程）
-            waitPromise.catch(() => {})
+            waitPromise.catch(() => {
+            })
             await this.send('Page.navigateToHistoryEntry', {entryId: entries[currentIndex - 1].id}, timeout)
             await waitPromise
             await this.updateState()
@@ -442,12 +413,12 @@ class SessionManager {
     /**
      * 前进
      */
-    async goForward(timeout = 30000): Promise<{navigated: boolean}> {
+    async goForward(timeout = DEFAULT_TIMEOUT): Promise<{ navigated: boolean }> {
         return this.withLock(async () => {
             this.ensureSession()
             const {currentIndex, entries} = await this.send<{
                 currentIndex: number
-                entries: Array<{id: number; url: string; title: string}>
+                entries: Array<{ id: number; url: string; title: string }>
             }>('Page.getNavigationHistory', undefined, timeout)
 
             if (currentIndex >= entries.length - 1) {
@@ -459,7 +430,8 @@ class SessionManager {
                 ['Page.loadEventFired', 'Page.navigatedWithinDocument'],
                 timeout,
             )
-            waitPromise.catch(() => {})
+            waitPromise.catch(() => {
+            })
             await this.send('Page.navigateToHistoryEntry', {entryId: entries[currentIndex + 1].id}, timeout)
             await waitPromise
             await this.updateState()
@@ -474,14 +446,15 @@ class SessionManager {
         return this.withLock(async () => {
             this.ensureSession()
 
-            const {ignoreCache = false, timeout = 30000} = options
+            const {ignoreCache = false, timeout = DEFAULT_TIMEOUT} = options
 
             const waitPromise = this.cdp!.waitForEvent(
                 'Page.loadEventFired',
                 undefined,
                 timeout,
             )
-            waitPromise.catch(() => {})
+            waitPromise.catch(() => {
+            })
 
             await this.send('Page.reload', {ignoreCache}, timeout)
 
@@ -493,10 +466,11 @@ class SessionManager {
     /**
      * 创建定位器
      */
-    createLocator(target: Target, options?: { timeout?: number }): Locator {
+    createLocator(target: Target, options?: { timeout?: number; nth?: number }): Locator {
         this.ensureSession()
         return new Locator(this.cdp!, target, this.sessionId!, {
             ...options,
+            nth: options?.nth ?? (target as { nth?: number }).nth,
             getUrl: () => this.state?.url,
         })
     }
@@ -525,6 +499,7 @@ class SessionManager {
             type: 'mouseMoved',
             x,
             y,
+            modifiers: this.modifiers,
         })
         this.behaviorSimulator.setCurrentPosition({x, y})
     }
@@ -542,6 +517,7 @@ class SessionManager {
             clickCount: 1,
             x: this.behaviorSimulator.getCurrentPosition().x,
             y: this.behaviorSimulator.getCurrentPosition().y,
+            modifiers: this.modifiers,
         })
     }
 
@@ -558,6 +534,7 @@ class SessionManager {
             clickCount: 1,
             x: this.behaviorSimulator.getCurrentPosition().x,
             y: this.behaviorSimulator.getCurrentPosition().y,
+            modifiers: this.modifiers,
         })
     }
 
@@ -573,6 +550,7 @@ class SessionManager {
             y: pos.y,
             deltaX,
             deltaY,
+            modifiers: this.modifiers,
         })
     }
 
@@ -581,9 +559,13 @@ class SessionManager {
      */
     async keyDown(key: string): Promise<void> {
         this.ensureSession()
+        if (MODIFIER_KEYS[key]) {
+            this.modifiers |= MODIFIER_KEYS[key]
+        }
         const keyDefinition = getKeyDefinition(key)
         await this.send('Input.dispatchKeyEvent', {
             type: 'keyDown',
+            modifiers: this.modifiers,
             ...keyDefinition,
         })
     }
@@ -596,8 +578,12 @@ class SessionManager {
         const keyDefinition = getKeyDefinition(key)
         await this.send('Input.dispatchKeyEvent', {
             type: 'keyUp',
+            modifiers: this.modifiers,
             ...keyDefinition,
         })
+        if (MODIFIER_KEYS[key]) {
+            this.modifiers &= ~MODIFIER_KEYS[key]
+        }
     }
 
     /**
@@ -608,10 +594,12 @@ class SessionManager {
         for (const char of text) {
             await this.send('Input.dispatchKeyEvent', {
                 type: 'keyDown',
+                modifiers: this.modifiers,
                 text: char,
             })
             await this.send('Input.dispatchKeyEvent', {
                 type: 'keyUp',
+                modifiers: this.modifiers,
                 text: char,
             })
             if (delay > 0) {
@@ -656,8 +644,13 @@ class SessionManager {
     /**
      * 截图
      */
-    async screenshot(fullPage = false): Promise<string> {
+    async screenshot(fullPage = false, scale?: number, format?: string, quality?: number): Promise<string> {
         this.ensureSession()
+
+        const captureParams: Record<string, unknown> = {format: format ?? 'png'}
+        if (quality !== undefined) {
+            captureParams.quality = quality
+        }
 
         if (fullPage) {
             // 获取页面完整高度
@@ -673,23 +666,19 @@ class SessionManager {
             await this.send('Emulation.setDeviceMetricsOverride', {
                 width,
                 height,
-                deviceScaleFactor: 1,
+                deviceScaleFactor: scale ?? 1,
                 mobile: false,
             })
 
             try {
-                const {data} = (await this.send('Page.captureScreenshot', {
-                    format: 'png',
-                })) as { data: string }
+                const {data} = (await this.send('Page.captureScreenshot', captureParams)) as { data: string }
                 return data
             } finally {
                 await this.send('Emulation.clearDeviceMetricsOverride')
             }
         }
 
-        const {data} = (await this.send('Page.captureScreenshot', {
-            format: 'png',
-        })) as { data: string }
+        const {data} = (await this.send('Page.captureScreenshot', captureParams)) as { data: string }
         return data
     }
 
@@ -766,7 +755,7 @@ class SessionManager {
      */
     async getCookies(urls?: string[]): Promise<Cookie[]> {
         this.ensureSession()
-        const params = urls?.length ? {urls} : {}
+        const params    = urls?.length ? {urls} : {}
         const {cookies} = (await this.send('Network.getCookies', params)) as {
             cookies: Cookie[];
         }
@@ -849,24 +838,54 @@ class SessionManager {
     async evaluate<T>(script: string, args?: unknown[], timeout?: number): Promise<T> {
         this.ensureSession()
 
-        let expression = script
+        // CDP 命令超时需大于脚本执行超时，给 WebSocket 通信留余量
+        const CDP_MARGIN  = 5000
+        const sendTimeout = timeout !== undefined ? timeout + CDP_MARGIN : undefined
+
+        // 有参数时使用 callFunctionOn：避免大 payload 字符串拼接，参数通过协议结构化传递
         if (args && args.length > 0) {
-            // 将参数序列化并注入
-            const argsStr = args.map((a) => JSON.stringify(a)).join(', ')
-            expression    = `(${script})(${argsStr})`
+            const {result: globalResult} = (await this.send('Runtime.evaluate', {
+                expression: 'globalThis',
+                returnByValue: false,
+            })) as { result: { objectId: string } }
+
+            try {
+                const callParams: Record<string, unknown> = {
+                    functionDeclaration: script,
+                    objectId: globalResult.objectId,
+                    arguments: args.map(a => ({value: a})),
+                    returnByValue: true,
+                    awaitPromise: true,
+                }
+                if (timeout !== undefined) {
+                    callParams.timeout = timeout
+                }
+                const {result, exceptionDetails} = (await this.send(
+                    'Runtime.callFunctionOn',
+                    callParams,
+                    sendTimeout,
+                )) as {
+                    result: { value: T }
+                    exceptionDetails?: { exception: { description: string } }
+                }
+                if (exceptionDetails) {
+                    throw new Error(exceptionDetails.exception.description)
+                }
+                return result.value
+            } finally {
+                this.send('Runtime.releaseObject', {objectId: globalResult.objectId}).catch(() => {
+                })
+            }
         }
 
         const evalParams: Record<string, unknown> = {
-            expression,
+            expression: script,
             returnByValue: true,
             awaitPromise: true,
         }
         if (timeout !== undefined) {
             evalParams.timeout = timeout
         }
-        // CDP 命令超时需大于脚本执行超时，给 WebSocket 通信留余量
-        const CDP_MARGIN = 5000
-        const sendTimeout = timeout !== undefined ? timeout + CDP_MARGIN : undefined
         const {result, exceptionDetails} = (await this.send('Runtime.evaluate', evalParams, sendTimeout)) as {
             result: { value: T };
             exceptionDetails?: { exception: { description: string } };
@@ -930,26 +949,6 @@ class SessionManager {
     }
 
     /**
-     * 新建页面（内部版本，不加锁，供 launch 等已持锁方法调用）
-     */
-    private async newPageInternal(): Promise<TargetInfo> {
-        this.ensureConnected()
-
-        const {targetId} = (await this.cdp!.send('Target.createTarget', {
-            url: 'about:blank',
-        })) as { targetId: string }
-
-        await this.attachToTargetInternal(targetId)
-
-        return {
-            targetId,
-            type: 'page',
-            url: 'about:blank',
-            title: '',
-        }
-    }
-
-    /**
      * 激活页面（切到前台）
      */
     async activateTarget(targetId: string): Promise<void> {
@@ -1002,6 +1001,96 @@ class SessionManager {
     }
 
     /**
+     * 获取当前状态
+     */
+    getState(): SessionState | null {
+        return this.state
+    }
+
+    /**
+     * 是否已连接
+     */
+    isConnected(): boolean {
+        return this.cdp !== null && this.cdp.isConnected
+    }
+
+    /**
+     * 发送 CDP 命令（page-level，携带 sessionId）
+     *
+     * 每次调用都检查连接状态，防止 close() 并发置空 this.cdp 后崩溃。
+     * 多步操作（type 循环、fullPage 截图等）的 await 间隙可能被 close() 打断，
+     * ensureSession() 确保在当前 tick 内 this.cdp 非空。
+     */
+    send<T>(method: string, params?: object, timeout?: number): Promise<T> {
+        this.ensureSession()
+        return this.cdp!.send(method, params, this.sessionId ?? undefined, timeout)
+    }
+
+    /**
+     * 发送 browser-level CDP 命令（不携带 sessionId）
+     * 用于 Target.*、Browser.* 等浏览器级命令
+     */
+    sendBrowserCommand<T>(method: string, params?: object): Promise<T> {
+        this.ensureConnected()
+        return this.cdp!.send(method, params)
+    }
+
+    /**
+     * 附加到指定页面（内部版本，不加锁，供 launch/connect 等已持锁方法调用）
+     */
+    private async attachToTargetInternal(targetId: string): Promise<void> {
+        this.ensureConnected()
+
+        // 如果已经附加到同一个 target，跳过
+        if (this.currentTargetId === targetId && this.sessionId) {
+            return
+        }
+
+        // 如果有之前的 session，先分离
+        if (this.sessionId) {
+            try {
+                await this.cdp!.send('Target.detachFromTarget', {
+                    sessionId: this.sessionId,
+                })
+            } catch {
+                // 忽略分离错误
+            }
+        }
+
+        // 附加到目标
+        const {sessionId} = (await this.cdp!.send('Target.attachToTarget', {
+            targetId,
+            flatten: true,
+        })) as { sessionId: string }
+
+        this.sessionId       = sessionId
+        this.currentTargetId = targetId
+
+        // 初始化会话
+        await this.initSession()
+    }
+
+    /**
+     * 新建页面（内部版本，不加锁，供 launch 等已持锁方法调用）
+     */
+    private async newPageInternal(): Promise<TargetInfo> {
+        this.ensureConnected()
+
+        const {targetId} = (await this.cdp!.send('Target.createTarget', {
+            url: 'about:blank',
+        })) as { targetId: string }
+
+        await this.attachToTargetInternal(targetId)
+
+        return {
+            targetId,
+            type: 'page',
+            url: 'about:blank',
+            title: '',
+        }
+    }
+
+    /**
      * 重置所有状态（同步，不加锁）
      *
      * 供已持有 withLock 的方法调用（launch/connect），避免 close() 的 withLock 重入死锁。
@@ -1019,32 +1108,13 @@ class SessionManager {
         }
 
         this.clearLogs()
+        this.modifiers = 0
+        this.behaviorSimulator.setCurrentPosition({x: 0, y: 0})
         this.sessionId          = null
         this.currentTargetId    = null
         this.state              = null
         this.listenersInstalled = false
         this.connectedPort      = 0
-    }
-
-    /**
-     * 获取当前状态
-     */
-    getState(): SessionState | null {
-        return this.state
-    }
-
-    /**
-     * 是否已连接
-     */
-    isConnected(): boolean {
-        return this.cdp !== null && this.cdp.isConnected
-    }
-
-    /**
-     * 是否有活跃会话
-     */
-    hasSession(): boolean {
-        return this.sessionId !== null
     }
 
     /**
@@ -1079,7 +1149,7 @@ class SessionManager {
         }
 
         return new Promise((resolve, reject) => {
-            const listeners: Array<{event: string; listener: (params: unknown) => void}> = []
+            const listeners: Array<{ event: string; listener: (params: unknown) => void }> = []
 
             const cleanup = () => {
                 clearTimeout(timer)
@@ -1235,27 +1305,6 @@ class SessionManager {
     }
 
     /**
-     * 发送 CDP 命令（page-level，携带 sessionId）
-     *
-     * 每次调用都检查连接状态，防止 close() 并发置空 this.cdp 后崩溃。
-     * 多步操作（type 循环、fullPage 截图等）的 await 间隙可能被 close() 打断，
-     * ensureSession() 确保在当前 tick 内 this.cdp 非空。
-     */
-    send<T>(method: string, params?: object, timeout?: number): Promise<T> {
-        this.ensureSession()
-        return this.cdp!.send(method, params, this.sessionId ?? undefined, timeout)
-    }
-
-    /**
-     * 发送 browser-level CDP 命令（不携带 sessionId）
-     * 用于 Target.*、Browser.* 等浏览器级命令
-     */
-    sendBrowserCommand<T>(method: string, params?: object): Promise<T> {
-        this.ensureConnected()
-        return this.cdp!.send(method, params)
-    }
-
-    /**
      * 确保已连接
      */
     private ensureConnected(): void {
@@ -1347,4 +1396,3 @@ function getKeyDefinition(key: string): {
 export function getSession(): SessionManager {
     return SessionManager.getInstance()
 }
-

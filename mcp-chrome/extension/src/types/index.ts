@@ -2,39 +2,6 @@
  * MCP Chrome Extension 类型定义
  */
 
-// ==================== Native Messaging 消息协议 ====================
-
-export interface Request {
-    id: string
-    action: string
-    params?: Record<string, unknown>
-}
-
-export interface Response {
-    id: string
-    success: boolean
-    data?: unknown
-    error?: string
-}
-
-export interface PingMessage {
-    type: 'ping'
-    timestamp: number
-}
-
-export interface PongMessage {
-    type: 'pong'
-    timestamp: number
-}
-
-export interface ConnectionMessage {
-    type: 'connection'
-    status: 'connected' | 'disconnected'
-    timestamp: number
-}
-
-export type WebSocketMessage = Request | PingMessage | ConnectionMessage
-
 // ==================== Tab 相关 ====================
 
 export interface TabInfo {
@@ -127,6 +94,7 @@ export interface ScreenshotParams {
     format?: 'png' | 'jpeg'
     quality?: number
     fullPage?: boolean
+    scale?: number  // 缩放比例（默认 1），低于 1 可降低分辨率加速全页截图
 }
 
 export interface ScreenshotResult {
@@ -271,20 +239,6 @@ export type InternalMessage =
     | ConnectMessage
     | DisconnectMessage
     | GetStatusMessage
-
-// ==================== Content Script 消息 ====================
-
-export interface ContentScriptRequest {
-    type: 'EXECUTE_ACTION'
-    action: string
-    params?: Record<string, unknown>
-}
-
-export interface ContentScriptResponse {
-    success: boolean
-    data?: unknown
-    error?: string
-}
 
 // ==================== Debugger (CDP) 操作 ====================
 

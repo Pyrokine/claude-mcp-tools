@@ -24,13 +24,13 @@ Chrome 浏览器自动化 MCP Server，双模式架构：**Extension 模式**（
 
 ## 兼容客户端
 
-| 客户端              | 状态 |
-|---------------------|------|
-| Claude Code         | ✅    |
-| Claude Desktop      | ✅    |
-| Cursor              | ✅    |
-| Windsurf            | ✅    |
-| 其他 MCP 兼容客户端 | ✅    |
+| 客户端            | 状态 |
+|----------------|----|
+| Claude Code    | ✅  |
+| Claude Desktop | ✅  |
+| Cursor         | ✅  |
+| Windsurf       | ✅  |
+| 其他 MCP 兼容客户端   | ✅  |
 
 ## 安装
 
@@ -109,56 +109,58 @@ browse(action="open", url="https://example.com")
 
 ### browse - 浏览器管理与导航
 
-| Action    | 描述                         |
-|-----------|------------------------------|
-| `launch`  | 启动新 Chrome 实例（CDP 模式）|
-| `connect` | 连接已运行的 Chrome（CDP 模式）|
-| `list`    | 列出所有页面/Tab               |
-| `attach`  | 附加到指定页面/Tab             |
-| `open`    | 导航到 URL                    |
-| `back`    | 后退                          |
-| `forward` | 前进                          |
-| `refresh` | 刷新                          |
-| `close`   | 关闭浏览器连接                 |
+| Action    | 描述                    |
+|-----------|-----------------------|
+| `launch`  | 启动新 Chrome 实例（CDP 模式） |
+| `connect` | 连接已运行的 Chrome（CDP 模式） |
+| `list`    | 列出所有页面/Tab            |
+| `attach`  | 附加到指定页面/Tab           |
+| `open`    | 导航到 URL               |
+| `back`    | 后退                    |
+| `forward` | 前进                    |
+| `refresh` | 刷新                    |
+| `close`   | 关闭浏览器连接               |
 
-Extension 特有：`list` 返回 `managed` 字段（Tab 是否在 MCP Chrome 分组中）和 `isActive` 字段（是否为当前操作目标）。`open` 自动创建 Tab 分组（cyan 色）。
+Extension 特有：`list` 返回 `managed` 字段（Tab 是否在 MCP Chrome 分组中）和 `isActive` 字段（是否为当前操作目标）。`open`
+自动创建 Tab 分组（cyan 色）。
 
 ### input - 键鼠输入
 
 事件序列模型，支持任意组合：
 
-| 事件类型                                  | 描述         |
-|-------------------------------------------|--------------|
-| `keydown` / `keyup`                       | 按键按下/释放 |
-| `mousedown` / `mouseup`                   | 鼠标按下/释放 |
-| `mousemove`                               | 鼠标移动      |
-| `wheel`                                   | 滚轮滚动      |
-| `touchstart` / `touchmove` / `touchend`   | 触摸事件      |
-| `type`                                    | 输入文本      |
-| `wait`                                    | 事件间暂停    |
+| 事件类型                                    | 描述      |
+|-----------------------------------------|---------|
+| `keydown` / `keyup`                     | 按键按下/释放 |
+| `mousedown` / `mouseup`                 | 鼠标按下/释放 |
+| `mousemove`                             | 鼠标移动    |
+| `wheel`                                 | 滚轮滚动    |
+| `touchstart` / `touchmove` / `touchend` | 触摸事件    |
+| `type`                                  | 输入文本    |
+| `wait`                                  | 事件间暂停   |
 
-参数：`humanize` 启用贝塞尔曲线移动和随机延迟。`tabId` 指定目标 Tab。`frame` 指定目标 iframe（CSS 选择器或索引）。均限 Extension 模式。
+参数：`humanize` 启用贝塞尔曲线移动和随机延迟。`tabId` 指定目标 Tab。`frame` 指定目标 iframe（CSS 选择器或索引）。均限
+Extension 模式。
 
 ### extract - 内容提取
 
-| Type         | 描述                         |
-|--------------|------------------------------|
-| `text`       | 提取文本内容                  |
-| `html`       | 提取 HTML 源码               |
-| `attribute`  | 提取元素属性                  |
-| `screenshot` | 截图                          |
-| `state`      | 获取页面状态（URL、标题、可交互元素）|
+| Type         | 描述                   |
+|--------------|----------------------|
+| `text`       | 提取文本内容               |
+| `html`       | 提取 HTML 源码           |
+| `attribute`  | 提取元素属性               |
+| `screenshot` | 截图                   |
+| `state`      | 获取页面状态（URL、标题、可交互元素） |
 
 参数：`output` 将结果保存到文件。`tabId` 指定目标 Tab。`frame` 指定目标 iframe。均限 Extension 模式。
 
 ### wait - 等待条件
 
-| For          | 描述                                         |
-|--------------|----------------------------------------------|
-| `element`    | 等待元素（visible/hidden/attached/detached）  |
-| `navigation` | 等待导航完成                                  |
-| `time`       | 固定延迟                                      |
-| `idle`       | 等待网络空闲                                  |
+| For          | 描述                                     |
+|--------------|----------------------------------------|
+| `element`    | 等待元素（visible/hidden/attached/detached） |
+| `navigation` | 等待导航完成                                 |
+| `time`       | 固定延迟                                   |
+| `idle`       | 等待网络空闲                                 |
 
 参数：`tabId` 指定目标 Tab。`frame` 指定目标 iframe。均限 Extension 模式。
 
@@ -166,48 +168,48 @@ Extension 特有：`list` 返回 `managed` 字段（Tab 是否在 MCP Chrome 分
 
 在页面上下文执行 JavaScript。
 
-| 参数      | 描述                                                                 |
-|-----------|----------------------------------------------------------------------|
-| `script`  | JavaScript 代码（必需）。裸 `return` 语句自动包裹 IIFE               |
-| `args`    | 传递给脚本的参数（script 须为函数表达式）                             |
-| `mode`    | `precise`（默认，debugger API）或 `stealth`（JS 注入）                |
-| `output`  | 将结果保存到文件（字符串写入原始文本，其他类型 JSON 序列化）           |
-| `tabId`   | 指定目标 Tab（Extension 模式）                                        |
-| `frame`   | 指定目标 iframe（CSS 选择器或索引，Extension 模式）                    |
-| `timeout` | 端到端超时预算（毫秒）                                                |
+| 参数        | 描述                                           |
+|-----------|----------------------------------------------|
+| `script`  | JavaScript 代码（必需）。裸 `return` 语句自动包裹 IIFE     |
+| `args`    | 传递给脚本的参数（script 须为函数表达式）                     |
+| `mode`    | `precise`（默认，debugger API）或 `stealth`（JS 注入） |
+| `output`  | 将结果保存到文件（字符串写入原始文本，其他类型 JSON 序列化）            |
+| `tabId`   | 指定目标 Tab（Extension 模式）                       |
+| `frame`   | 指定目标 iframe（CSS 选择器或索引，Extension 模式）         |
+| `timeout` | 端到端超时预算（毫秒）                                  |
 
 结果超过 100KB 时自动落盘到 `/tmp/`，返回文件路径和大小。
 
 ### manage - 页面与环境管理
 
-| Action       | 描述                                             |
-|--------------|--------------------------------------------------|
-| `newPage`    | 新建页面/Tab                                      |
-| `closePage`  | 关闭页面                                          |
-| `clearCache` | 清除缓存/Cookie/存储                              |
-| `viewport`   | 设置视口大小                                      |
-| `userAgent`  | 设置 User-Agent                                   |
-| `emulate`    | 设备模拟（iPhone、iPad 等）                        |
-| `inputMode`  | 查询或设置输入模式（`precise` / `stealth`）        |
-| `stealth`    | 注入反检测脚本                                    |
-| `cdp`        | 发送原始 CDP 命令（高级，如 `Runtime.evaluate`）   |
+| Action       | 描述                                   |
+|--------------|--------------------------------------|
+| `newPage`    | 新建页面/Tab                             |
+| `closePage`  | 关闭页面                                 |
+| `clearCache` | 清除缓存/Cookie/存储                       |
+| `viewport`   | 设置视口大小                               |
+| `userAgent`  | 设置 User-Agent                        |
+| `emulate`    | 设备模拟（iPhone、iPad 等）                  |
+| `inputMode`  | 查询或设置输入模式（`precise` / `stealth`）     |
+| `stealth`    | 注入反检测脚本                              |
+| `cdp`        | 发送原始 CDP 命令（高级，如 `Runtime.evaluate`） |
 
 ### logs - 浏览器日志
 
-| Type      | 描述                       |
-|-----------|----------------------------|
-| `console` | 控制台日志（支持级别过滤）  |
-| `network` | 网络请求日志（支持 URL 过滤）|
+| Type      | 描述                |
+|-----------|-------------------|
+| `console` | 控制台日志（支持级别过滤）     |
+| `network` | 网络请求日志（支持 URL 过滤） |
 
 参数：`output` 将结果保存到文件。`tabId` 指定目标 Tab（Extension 模式）。`frame` 不适用于日志。
 
 ### cookies - Cookie 管理
 
-| Action   | 描述            |
-|----------|-----------------|
-| `get`    | 获取 Cookie     |
-| `set`    | 设置 Cookie     |
-| `delete` | 删除 Cookie     |
+| Action   | 描述          |
+|----------|-------------|
+| `get`    | 获取 Cookie   |
+| `set`    | 设置 Cookie   |
+| `delete` | 删除 Cookie   |
 | `clear`  | 清空所有 Cookie |
 
 ## Target：统一元素定位器
@@ -216,37 +218,76 @@ Extension 特有：`list` 返回 `managed` 字段（Tab 是否在 MCP Chrome 分
 
 ```typescript
 // 按可访问性（推荐 - 最稳定）
-{ role: "button", name: "提交" }
+{
+    role: "button", name
+:
+    "提交"
+}
 
 // 按文本内容
-{ text: "点击这里", exact: true }
+{
+    text: "点击这里", exact
+:
+    true
+}
 
 // 按表单 label
-{ label: "邮箱" }
+{
+    label: "邮箱"
+}
 
 // 按 placeholder
-{ placeholder: "请输入姓名" }
+{
+    placeholder: "请输入姓名"
+}
 
 // 按 title 属性
-{ title: "关闭对话框" }
+{
+    title: "关闭对话框"
+}
 
 // 按 alt 文本（图片）
-{ alt: "头像" }
+{
+    alt: "头像"
+}
 
 // 按 test ID
-{ testId: "submit-button" }
+{
+    testId: "submit-button"
+}
 
 // 按 CSS 选择器
-{ css: "#login-form .submit-btn" }
+{
+    css: "#login-form .submit-btn"
+}
+
+// 多匹配消歧（从 0 开始）
+{
+    css: ".ant-select-input", nth
+:
+    1
+}
 
 // 按 CSS + 文本（按文本内容过滤）
-{ css: "button", text: "提交", exact: true }
+{
+    css: "button", text
+:
+    "提交", exact
+:
+    true
+}
 
 // 按 XPath
-{ xpath: "//button[@type='submit']" }
+{
+    xpath: "//button[@type='submit']"
+}
 
 // 按坐标
-{ x: 100, y: 200 }
+{
+    x: 100, y
+:
+    200
+}
 ```
 
 ## 使用示例
@@ -291,6 +332,9 @@ evaluate(script="document.title", tabId="12345")
 ```
 // 全页面
 extract(type="screenshot", fullPage=true)
+
+// JPEG + quality（更小体积）
+extract(type="screenshot", format="jpeg", quality=80, output="/tmp/screenshot.jpg")
 
 // 保存到文件
 extract(type="screenshot", output="/tmp/screenshot.png")
@@ -420,4 +464,3 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)。
 
 - [Model Context Protocol](https://modelcontextprotocol.io/) - MCP 规范
 - [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) - CDP 文档
-

@@ -2,7 +2,8 @@
 
 English | [中文](README_zh.md)
 
-Chrome browser automation MCP Server with dual-mode architecture: **Extension mode** (recommended) controls your existing browser, **CDP mode** (fallback) launches a dedicated instance.
+Chrome browser automation MCP Server with dual-mode architecture: **Extension mode** (recommended) controls your
+existing browser, **CDP mode** (fallback) launches a dedicated instance.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](https://nodejs.org/)
@@ -17,7 +18,8 @@ Chrome browser automation MCP Server with dual-mode architecture: **Extension mo
 - **Semantic Targeting**: 11 ways to locate elements (role, text, label, css, css+text combo, xpath, coordinates, etc.)
 - **Auto-Wait**: Built-in clickability and input-ready detection with deadline-based timeout budget
 - **Dual Input Mode**: `precise` (debugger API, bypasses CSP) or `stealth` (JS injection, no debug banner)
-- **Smart Output**: Bare `return` auto-wrapped in IIFE; large results (>100KB) auto-saved to file; `output` writes raw text for strings
+- **Smart Output**: Bare `return` auto-wrapped in IIFE; large results (>100KB) auto-saved to file; `output` writes raw
+  text for strings
 - **Multi-Server**: Extension auto-discovers and connects to multiple MCP Server instances simultaneously
 - **Anti-Detection**: Optional fingerprint masking and behavior simulation
 - **Structured Errors**: Every error includes code, message, suggestion, and context
@@ -81,7 +83,8 @@ claude mcp add chrome -- node /path/to/mcp-chrome/dist/index.js
 
 **Step 3: Connect**
 
-The Extension auto-connects to the MCP Server via HTTP/WebSocket (port 19222-19299). Click the toolbar icon to verify connection status.
+The Extension auto-connects to the MCP Server via HTTP/WebSocket (port 19222-19299). Click the toolbar icon to verify
+connection status.
 
 ```
 browse(action="list")          // List all tabs
@@ -91,7 +94,8 @@ extract(type="screenshot")
 
 ### Mode 2: CDP Mode (Fallback)
 
-CDP mode launches or connects to a dedicated Chrome instance. Used when the Extension is not installed, or for headless/isolated scenarios.
+CDP mode launches or connects to a dedicated Chrome instance. Used when the Extension is not installed, or for
+headless/isolated scenarios.
 
 ```bash
 # Start Chrome with remote debugging
@@ -103,25 +107,27 @@ browse(action="connect", port=9222)
 browse(action="open", url="https://example.com")
 ```
 
-> When the Extension is connected, all tools use Extension mode automatically. CDP mode activates only when the Extension is unavailable.
+> When the Extension is connected, all tools use Extension mode automatically. CDP mode activates only when the
+> Extension is unavailable.
 
 ## Available Tools (8 Tools)
 
 ### browse - Browser Management & Navigation
 
-| Action    | Description                                    |
-|-----------|------------------------------------------------|
-| `launch`  | Launch new Chrome instance (CDP mode)          |
-| `connect` | Connect to running Chrome (CDP mode)           |
-| `list`    | List all pages/tabs                            |
-| `attach`  | Attach to a specific page/tab                  |
-| `open`    | Navigate to URL                                |
-| `back`    | Go back in history                             |
-| `forward` | Go forward in history                          |
-| `refresh` | Reload page                                    |
-| `close`   | Close browser connection                       |
+| Action    | Description                           |
+|-----------|---------------------------------------|
+| `launch`  | Launch new Chrome instance (CDP mode) |
+| `connect` | Connect to running Chrome (CDP mode)  |
+| `list`    | List all pages/tabs                   |
+| `attach`  | Attach to a specific page/tab         |
+| `open`    | Navigate to URL                       |
+| `back`    | Go back in history                    |
+| `forward` | Go forward in history                 |
+| `refresh` | Reload page                           |
+| `close`   | Close browser connection              |
 
-Extension-specific: `list` returns `managed` field (whether tab is in MCP Chrome group) and `isActive` field (whether it's the current operation target). `open` auto-creates tab group (cyan color).
+Extension-specific: `list` returns `managed` field (whether tab is in MCP Chrome group) and `isActive` field (whether
+it's the current operation target). `open` auto-creates tab group (cyan color).
 
 ### input - Keyboard & Mouse Input
 
@@ -137,7 +143,8 @@ Event sequence model supporting arbitrary combinations:
 | `type`                                  | Type text                  |
 | `wait`                                  | Pause between events       |
 
-Parameters: `humanize` enables Bézier curve movement and random delays. `tabId` targets a specific tab. `frame` targets an iframe (CSS selector or index). Both Extension mode only.
+Parameters: `humanize` enables Bézier curve movement and random delays. `tabId` targets a specific tab. `frame` targets
+an iframe (CSS selector or index). Both Extension mode only.
 
 ### extract - Content Extraction
 
@@ -149,7 +156,8 @@ Parameters: `humanize` enables Bézier curve movement and random delays. `tabId`
 | `screenshot` | Take screenshot                                   |
 | `state`      | Get page state (URL, title, interactive elements) |
 
-Parameters: `output` saves result to file. `tabId` targets a specific tab. `frame` targets an iframe. Both Extension mode only.
+Parameters: `output` saves result to file. `tabId` targets a specific tab. `frame` targets an iframe. Both Extension
+mode only.
 
 ### wait - Wait for Conditions
 
@@ -166,31 +174,31 @@ Parameters: `tabId` targets a specific tab. `frame` targets an iframe. Both Exte
 
 Execute JavaScript in page context.
 
-| Parameter | Description                                                                        |
-|-----------|------------------------------------------------------------------------------------|
-| `script`  | JavaScript code (required). Bare `return` statements auto-wrapped in IIFE          |
-| `args`    | Arguments passed to script (script must be a function expression)                  |
-| `mode`    | `precise` (default, debugger API) or `stealth` (JS injection)                     |
-| `output`  | Save result to file (strings written as raw text, others as JSON)                  |
-| `tabId`   | Target a specific tab (Extension mode)                                             |
-| `frame`   | Target an iframe by CSS selector or index (Extension mode)                         |
-| `timeout` | End-to-end budget (ms)                                                             |
+| Parameter | Description                                                               |
+|-----------|---------------------------------------------------------------------------|
+| `script`  | JavaScript code (required). Bare `return` statements auto-wrapped in IIFE |
+| `args`    | Arguments passed to script (script must be a function expression)         |
+| `mode`    | `precise` (default, debugger API) or `stealth` (JS injection)             |
+| `output`  | Save result to file (strings written as raw text, others as JSON)         |
+| `tabId`   | Target a specific tab (Extension mode)                                    |
+| `frame`   | Target an iframe by CSS selector or index (Extension mode)                |
+| `timeout` | End-to-end budget (ms)                                                    |
 
 Results >100KB are auto-saved to `/tmp/` with a structured hint returned.
 
 ### manage - Page & Environment Management
 
-| Action       | Description                                                    |
-|--------------|----------------------------------------------------------------|
-| `newPage`    | Create new page/tab                                            |
-| `closePage`  | Close page                                                     |
-| `clearCache` | Clear cache/cookies/storage                                    |
-| `viewport`   | Set viewport size                                              |
-| `userAgent`  | Set User-Agent                                                 |
-| `emulate`    | Device emulation (iPhone, iPad, etc.)                          |
-| `inputMode`  | Query or set input mode (`precise` / `stealth`)                |
-| `stealth`    | Inject anti-detection scripts                                  |
-| `cdp`        | Send raw CDP command (advanced, e.g. `Runtime.evaluate`)       |
+| Action       | Description                                              |
+|--------------|----------------------------------------------------------|
+| `newPage`    | Create new page/tab                                      |
+| `closePage`  | Close page                                               |
+| `clearCache` | Clear cache/cookies/storage                              |
+| `viewport`   | Set viewport size                                        |
+| `userAgent`  | Set User-Agent                                           |
+| `emulate`    | Device emulation (iPhone, iPad, etc.)                    |
+| `inputMode`  | Query or set input mode (`precise` / `stealth`)          |
+| `stealth`    | Inject anti-detection scripts                            |
+| `cdp`        | Send raw CDP command (advanced, e.g. `Runtime.evaluate`) |
 
 ### logs - Browser Logs
 
@@ -199,7 +207,8 @@ Results >100KB are auto-saved to `/tmp/` with a structured hint returned.
 | `console` | Console logs (with level filter)       |
 | `network` | Network request logs (with URL filter) |
 
-Parameters: `output` saves result to file. `tabId` targets a specific tab (Extension mode). `frame` is not applicable for logs.
+Parameters: `output` saves result to file. `tabId` targets a specific tab (Extension mode). `frame` is not applicable
+for logs.
 
 ### cookies - Cookie Management
 
@@ -216,37 +225,76 @@ All tools use a unified `Target` type for element location:
 
 ```typescript
 // By accessibility (recommended - most stable)
-{ role: "button", name: "Submit" }
+{
+    role: "button", name
+:
+    "Submit"
+}
 
 // By text content
-{ text: "Click here", exact: true }
+{
+    text: "Click here", exact
+:
+    true
+}
 
 // By form label
-{ label: "Email" }
+{
+    label: "Email"
+}
 
 // By placeholder
-{ placeholder: "Enter your name" }
+{
+    placeholder: "Enter your name"
+}
 
 // By title attribute
-{ title: "Close dialog" }
+{
+    title: "Close dialog"
+}
 
 // By alt text (images)
-{ alt: "Profile picture" }
+{
+    alt: "Profile picture"
+}
 
 // By test ID
-{ testId: "submit-button" }
+{
+    testId: "submit-button"
+}
 
 // By CSS selector
-{ css: "#login-form .submit-btn" }
+{
+    css: "#login-form .submit-btn"
+}
+
+// Disambiguate multiple matches (0-based)
+{
+    css: ".ant-select-input", nth
+:
+    1
+}
 
 // By CSS + text (filter by text content)
-{ css: "button", text: "Submit", exact: true }
+{
+    css: "button", text
+:
+    "Submit", exact
+:
+    true
+}
 
 // By XPath
-{ xpath: "//button[@type='submit']" }
+{
+    xpath: "//button[@type='submit']"
+}
 
 // By coordinates
-{ x: 100, y: 200 }
+{
+    x: 100, y
+:
+    200
+}
 ```
 
 ## Usage Examples
@@ -291,6 +339,9 @@ evaluate(script="document.title", tabId="12345")
 ```
 // Full page
 extract(type="screenshot", fullPage=true)
+
+// JPEG with quality (smaller file)
+extract(type="screenshot", format="jpeg", quality=80, output="/tmp/screenshot.jpg")
 
 // Save to file
 extract(type="screenshot", output="/tmp/screenshot.png")
@@ -420,4 +471,3 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 - [Model Context Protocol](https://modelcontextprotocol.io/) - MCP specification
 - [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) - CDP documentation
-

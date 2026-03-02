@@ -1,7 +1,7 @@
 /**
- * 公共 JSON Schema 定义
+ * 公共 Schema 定义
  *
- * 用于 MCP 工具的 inputSchema，确保客户端侧的类型提示和契约校验
+ * Target Zod Schema 和定位参数转换
  */
 
 import {z} from 'zod'
@@ -22,20 +22,51 @@ import type {Target} from '../core/types.js'
  * - xpath: XPath 定位
  * - x/y: 坐标定位
  */
-const targetObjectSchema = z.union([
-                                       z.object({role: z.string(), name: z.string().optional()}),
-                                       // CSS+text 必须在纯 text / 纯 CSS 之前：z.object strip 未知字段
-                                       z.object({css: z.string(), text: z.string(), exact: z.boolean().optional()}),
-                                       z.object({text: z.string(), exact: z.boolean().optional()}),
-                                       z.object({label: z.string(), exact: z.boolean().optional()}),
-                                       z.object({placeholder: z.string(), exact: z.boolean().optional()}),
-                                       z.object({title: z.string(), exact: z.boolean().optional()}),
-                                       z.object({alt: z.string(), exact: z.boolean().optional()}),
-                                       z.object({testId: z.string()}),
-                                       z.object({css: z.string()}),
-                                       z.object({xpath: z.string()}),
-                                       z.object({x: z.number(), y: z.number()}),
-                                   ])
+const targetObjectSchema = z.intersection(
+    z.union([
+                z.object({
+                             role: z.string().describe('ARIA role（如 button、link、textbox）'),
+                             name: z.string().optional().describe('可访问名称（可选）'),
+                         }),
+                // CSS+text 必须在纯 text / 纯 CSS 之前：z.object strip 未知字段
+                z.object({
+                             css: z.string().describe('CSS 选择器'),
+                             text: z.string().describe('文本内容'),
+                             exact: z.boolean().optional().describe('是否精确匹配（默认 false）'),
+                         }),
+                z.object({
+                             text: z.string().describe('文本内容'),
+                             exact: z.boolean().optional().describe('是否精确匹配（默认 false）'),
+                         }),
+                z.object({
+                             label: z.string().describe('label 文本'),
+                             exact: z.boolean().optional().describe('是否精确匹配（默认 false）'),
+                         }),
+                z.object({
+                             placeholder: z.string().describe('placeholder 文本'),
+                             exact: z.boolean().optional().describe('是否精确匹配（默认 false）'),
+                         }),
+                z.object({
+                             title: z.string().describe('title 属性值'),
+                             exact: z.boolean().optional().describe('是否精确匹配（默认 false）'),
+                         }),
+                z.object({
+                             alt: z.string().describe('alt 属性值'),
+                             exact: z.boolean().optional().describe('是否精确匹配（默认 false）'),
+                         }),
+                z.object({testId: z.string().describe('data-testid 值')}),
+                z.object({css: z.string().describe('CSS 选择器')}),
+                z.object({xpath: z.string().describe('XPath 表达式')}),
+                z.object({
+                             x: z.number().describe('X 坐标（像素）'),
+                             y: z.number().describe('Y 坐标（像素）'),
+                         }),
+            ]),
+    z.object({
+                 nth: z.number().int().min(0).optional()
+                       .describe('第 N 个匹配元素（从 0 开始，默认 0 即第一个）'),
+             }),
+)
 
 /**
  * Target Zod Schema（运行时校验）
@@ -58,136 +89,6 @@ export const targetZodSchema = z.preprocess(
 )
 
 /**
- * Target JSON Schema（MCP 契约）
- *
- * 使用 oneOf 表示互斥的定位方式，客户端可根据此生成参数提示
- */
-export const targetJsonSchema = {
-    oneOf: [
-        {
-            type: 'object',
-            title: '可访问性树定位',
-            description: '通过 ARIA role 和 name 定位元素',
-            properties: {
-                role: {type: 'string', description: 'ARIA role（如 button、link、textbox）'},
-                name: {type: 'string', description: '可访问名称（可选）'},
-            },
-            required: ['role'],
-            additionalProperties: false,
-        },
-        {
-            type: 'object',
-            title: '文本内容定位',
-            description: '通过元素文本内容定位',
-            properties: {
-                text: {type: 'string', description: '文本内容'},
-                exact: {type: 'boolean', description: '是否精确匹配（默认 false）'},
-            },
-            required: ['text'],
-            additionalProperties: false,
-        },
-        {
-            type: 'object',
-            title: 'Label 定位',
-            description: '通过表单 label 文本定位关联的输入元素',
-            properties: {
-                label: {type: 'string', description: 'label 文本'},
-                exact: {type: 'boolean', description: '是否精确匹配（默认 false）'},
-            },
-            required: ['label'],
-            additionalProperties: false,
-        },
-        {
-            type: 'object',
-            title: 'Placeholder 定位',
-            description: '通过输入框的 placeholder 属性定位',
-            properties: {
-                placeholder: {type: 'string', description: 'placeholder 文本'},
-                exact: {type: 'boolean', description: '是否精确匹配（默认 false）'},
-            },
-            required: ['placeholder'],
-            additionalProperties: false,
-        },
-        {
-            type: 'object',
-            title: 'Title 属性定位',
-            description: '通过元素的 title 属性定位',
-            properties: {
-                title: {type: 'string', description: 'title 属性值'},
-                exact: {type: 'boolean', description: '是否精确匹配（默认 false）'},
-            },
-            required: ['title'],
-            additionalProperties: false,
-        },
-        {
-            type: 'object',
-            title: 'Alt 属性定位',
-            description: '通过图片的 alt 属性定位',
-            properties: {
-                alt: {type: 'string', description: 'alt 属性值'},
-                exact: {type: 'boolean', description: '是否精确匹配（默认 false）'},
-            },
-            required: ['alt'],
-            additionalProperties: false,
-        },
-        {
-            type: 'object',
-            title: 'TestId 定位',
-            description: '通过 data-testid 属性定位',
-            properties: {
-                testId: {type: 'string', description: 'data-testid 值'},
-            },
-            required: ['testId'],
-            additionalProperties: false,
-        },
-        {
-            type: 'object',
-            title: 'CSS 选择器定位',
-            description: '通过 CSS 选择器定位',
-            properties: {
-                css: {type: 'string', description: 'CSS 选择器'},
-            },
-            required: ['css'],
-            additionalProperties: false,
-        },
-        {
-            type: 'object',
-            title: 'CSS + 文本组合定位',
-            description: '通过 CSS 选择器 + 文本内容组合定位（先 CSS 筛选，再按文本过滤）',
-            properties: {
-                css: {type: 'string', description: 'CSS 选择器'},
-                text: {type: 'string', description: '文本内容'},
-                exact: {type: 'boolean', description: '是否精确匹配（默认 false）'},
-            },
-            required: ['css', 'text'],
-            additionalProperties: false,
-        },
-        {
-            type: 'object',
-            title: 'XPath 定位',
-            description: '通过 XPath 表达式定位',
-            properties: {
-                xpath: {type: 'string', description: 'XPath 表达式'},
-            },
-            required: ['xpath'],
-            additionalProperties: false,
-        },
-        {
-            type: 'object',
-            title: '坐标定位',
-            description: '通过页面坐标定位',
-            properties: {
-                x: {type: 'number', description: 'X 坐标（像素）'},
-                y: {type: 'number', description: 'Y 坐标（像素）'},
-            },
-            required: ['x', 'y'],
-            additionalProperties: false,
-        },
-    ],
-    description: '目标元素定位方式',
-} as const
-
-/**
  * 转义 CSS 属性选择器中的值（防止引号注入）
  */
 function escapeAttrValue(value: string): string {
@@ -198,21 +99,29 @@ function escapeAttrValue(value: string): string {
  * 转义 XPath 字符串字面量（处理包含引号的值）
  */
 function escapeXPathString(str: string): string {
-    if (!str.includes("'")) return `'${str}'`
-    if (!str.includes('"')) return `"${str}"`
+    if (!str.includes('\'')) {
+        return `'${str}'`
+    }
+    if (!str.includes('"')) {
+        return `"${str}"`
+    }
     // 同时包含单双引号：用 concat 拼接
     const parts: string[] = []
-    let current = ''
+    let current           = ''
     for (const char of str) {
-        if (char === "'") {
-            if (current) parts.push(`'${current}'`)
+        if (char === '\'') {
+            if (current) {
+                parts.push(`'${current}'`)
+            }
             parts.push(`"'"`)
             current = ''
         } else {
             current += char
         }
     }
-    if (current) parts.push(`'${current}'`)
+    if (current) {
+        parts.push(`'${current}'`)
+    }
     return `concat(${parts.join(',')})`
 }
 
@@ -220,7 +129,7 @@ function escapeXPathString(str: string): string {
  * 从 Target 中提取 exact 标志
  */
 function getExact(target: Target): boolean {
-    return 'exact' in target && (target as {exact?: boolean}).exact === true
+    return (target as { exact?: boolean }).exact ?? false
 }
 
 /**
@@ -300,7 +209,9 @@ const IMPLICIT_ROLE_XPATH: Record<string, string> = {
  * - testId/css/xpath：exact 不影响
  * - role 值自动 lowercase（ARIA role 不区分大小写）
  */
-export function targetToFindParams(target: Target): {selector?: string; text?: string; xpath?: string} {
+export function targetToFindParams(target: Target & { nth?: number }): {
+    selector?: string; text?: string; xpath?: string; nth?: number
+} {
     let selector: string | undefined
     let text: string | undefined
     let xpath: string | undefined
@@ -308,8 +219,8 @@ export function targetToFindParams(target: Target): {selector?: string; text?: s
     if ('css' in target && target.css) {
         selector = target.css
         // CSS + 文本组合定位：先 CSS 筛选，再按 text 过滤
-        if ('text' in target && (target as {text?: string}).text) {
-            text = (target as {text: string}).text
+        if ('text' in target && (target as { text?: string }).text) {
+            text = (target as { text: string }).text
         }
     } else if ('xpath' in target && target.xpath) {
         xpath = target.xpath
@@ -326,7 +237,7 @@ export function targetToFindParams(target: Target): {selector?: string; text?: s
         if ('name' in target && target.name) {
             // role + name：xpath 同时匹配隐式/显式 role 和多来源可访问名称
             const roleConditions = [`@role=${escapeXPathString(roleLower)}`]
-            const implicitXPath = IMPLICIT_ROLE_XPATH[roleLower]
+            const implicitXPath  = IMPLICIT_ROLE_XPATH[roleLower]
             if (implicitXPath) {
                 roleConditions.push(implicitXPath)
             }
@@ -342,12 +253,12 @@ export function targetToFindParams(target: Target): {selector?: string; text?: s
                 `contains(@value,${nameStr})`,
                 `@id=//label[contains(.,${nameStr})]/@for`,
             ].join(' or ')
-            xpath = `//*[(${roleConditions.join(' or ')}) and (${nameConditions})]`
+            xpath                = `//*[(${roleConditions.join(' or ')}) and (${nameConditions})]`
         } else {
             // role only：CSS 选择器匹配隐式标签 + 显式 role
             const escapedRole = escapeAttrValue(roleLower)
-            const selectors = [`[role="${escapedRole}"]`]
-            const implicit = IMPLICIT_ROLE_SELECTORS[roleLower]
+            const selectors   = [`[role="${escapedRole}"]`]
+            const implicit    = IMPLICIT_ROLE_SELECTORS[roleLower]
             if (implicit) {
                 selectors.push(...implicit)
             }
@@ -355,36 +266,44 @@ export function targetToFindParams(target: Target): {selector?: string; text?: s
         }
     } else if ('label' in target && target.label) {
         // xpath 同时匹配 aria-label、<label for="id"> 关联、<label> 内嵌控件
-        const xpathStr = escapeXPathString(target.label)
+        const xpathStr     = escapeXPathString(target.label)
         const formControls = 'self::input or self::select or self::textarea'
         if (getExact(target)) {
             const labelMatch = `normalize-space(.)=${xpathStr}`
-            xpath = `//*[@aria-label=${xpathStr}]`
-                + ` | //*[@id=//label[${labelMatch}]/@for]`
-                + ` | //label[${labelMatch}]/descendant::*[${formControls}]`
-                + ` | //label[${labelMatch}]/following-sibling::*[${formControls}][1]`
-                + ` | //label[${labelMatch}]/parent::*/following-sibling::*[1]/descendant::*[${formControls}]`
+            xpath            = `//*[@aria-label=${xpathStr}]`
+                               +
+                               ` | //*[@id=//label[${labelMatch}]/@for]`
+                               +
+                               ` | //label[${labelMatch}]/descendant::*[${formControls}]`
+                               +
+                               ` | //label[${labelMatch}]/following-sibling::*[${formControls}][1]`
+                               +
+                               ` | //label[${labelMatch}]/parent::*/following-sibling::*[1]/descendant::*[${formControls}]`
         } else {
             const labelMatch = `contains(.,${xpathStr})`
-            xpath = `//*[contains(@aria-label,${xpathStr})]`
-                + ` | //*[@id=//label[${labelMatch}]/@for]`
-                + ` | //label[${labelMatch}]/descendant::*[${formControls}]`
-                + ` | //label[${labelMatch}]/following-sibling::*[${formControls}][1]`
-                + ` | //label[${labelMatch}]/parent::*/following-sibling::*[1]/descendant::*[${formControls}]`
+            xpath            = `//*[contains(@aria-label,${xpathStr})]`
+                               +
+                               ` | //*[@id=//label[${labelMatch}]/@for]`
+                               +
+                               ` | //label[${labelMatch}]/descendant::*[${formControls}]`
+                               +
+                               ` | //label[${labelMatch}]/following-sibling::*[${formControls}][1]`
+                               +
+                               ` | //label[${labelMatch}]/parent::*/following-sibling::*[1]/descendant::*[${formControls}]`
         }
     } else if ('placeholder' in target && target.placeholder) {
         const escaped = escapeAttrValue(target.placeholder)
-        selector = getExact(target) ? `[placeholder="${escaped}"]` : `[placeholder*="${escaped}"]`
+        selector      = getExact(target) ? `[placeholder="${escaped}"]` : `[placeholder*="${escaped}"]`
     } else if ('title' in target && target.title) {
         const escaped = escapeAttrValue(target.title)
-        selector = getExact(target) ? `[title="${escaped}"]` : `[title*="${escaped}"]`
+        selector      = getExact(target) ? `[title="${escaped}"]` : `[title*="${escaped}"]`
     } else if ('alt' in target && target.alt) {
         const escaped = escapeAttrValue(target.alt)
-        selector = getExact(target) ? `[alt="${escaped}"]` : `[alt*="${escaped}"]`
+        selector      = getExact(target) ? `[alt="${escaped}"]` : `[alt*="${escaped}"]`
     } else if ('testId' in target && target.testId) {
         selector = `[data-testid="${escapeAttrValue(target.testId)}"]`
     }
 
-    return {selector, text, xpath}
+    return {selector, text, xpath, nth: (target as { nth?: number }).nth}
 }
 
