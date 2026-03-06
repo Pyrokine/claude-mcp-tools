@@ -107,7 +107,9 @@ export class ActionHandler {
         // 页面内容提取
         this.actions.set('get_text', this.getText.bind(this))
         this.actions.set('get_html', this.getHtml.bind(this))
+        this.actions.set('get_html_with_images', this.getHtmlWithImages.bind(this))
         this.actions.set('get_attribute', this.getAttribute.bind(this))
+        this.actions.set('get_metadata', this.getMetadata.bind(this))
 
         // Cookies
         this.actions.set('cookies_get', this.cookiesGet.bind(this))
@@ -648,6 +650,7 @@ export class ActionHandler {
         const result = await chrome.debugger.sendCommand({tabId}, 'Page.captureScreenshot', {
             format: p?.format || 'png',
             quality: p?.quality,
+            ...(p?.clip ? {clip: {...p.clip, scale: p?.scale ?? 1}} : {}),
         }) as { data: string }
 
         return {
@@ -893,6 +896,49 @@ export class ActionHandler {
         return results[0].result as { html: string }
     }
 
+    private async getHtmlWithImages(params: unknown): Promise<{
+        html: string
+        images: Array<{
+            index: number;
+            src: string;
+            dataSrc: string;
+            alt: string;
+            width: number;
+            height: number;
+            naturalWidth: number;
+            naturalHeight: number
+        }>
+    }> {
+        const p     = params as { tabId?: number; selector?: string; outer?: boolean }
+        const tabId = await this.getTargetTabId(p?.tabId)
+
+        const results = await chrome.scripting.executeScript({
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: extractHtmlWithImages,
+                                                                 args: [p?.selector ?? null, p?.outer ?? true],
+                                                             })
+
+        return results[0].result as {
+            html: string
+            images: Array<{
+                index: number;
+                src: string;
+                dataSrc: string;
+                alt: string;
+                width: number;
+                height: number;
+                naturalWidth: number;
+                naturalHeight: number
+            }>
+        }
+    }
+
     // ==================== Cookies ====================
 
     private async getAttribute(params: unknown): Promise<{ value: string | null }> {
@@ -920,6 +966,24 @@ export class ActionHandler {
                                                              })
 
         return results[0].result as { value: string | null }
+    }
+
+    private async getMetadata(params: unknown): Promise<Record<string, unknown>> {
+        const p     = params as { tabId?: number }
+        const tabId = await this.getTargetTabId(p?.tabId)
+
+        const results = await chrome.scripting.executeScript({
+                                                                 target: {
+                                                                     tabId,
+                                                                     frameIds: [
+                                                                         (p as { frameId?: number })?.frameId ??
+                                                                         0,
+                                                                     ],
+                                                                 },
+                                                                 func: extractMetadata,
+                                                             })
+
+        return results[0].result as Record<string, unknown>
     }
 
     private async cookiesGet(params: unknown): Promise<chrome.cookies.Cookie[]> {
@@ -1456,7 +1520,7 @@ export class ActionHandler {
      * 2. 通过 chrome.webNavigation.getAllFrames 获取所有子框架
      * 3. 先尝试 URL 精确匹配，再按 DOM 索引匹配
      */
-    private async resolveFrame(params: unknown): Promise<{ frameId: number }> {
+    private async resolveFrame(params: unknown): Promise<{ frameId: number; offset: { x: number; y: number } | null }> {
         const p = params as ResolveFrameParams
         if (p.frame === undefined) {
             throw new Error('frame is required')
@@ -1533,19 +1597,25 @@ export class ActionHandler {
         }
 
         // 策略 1: URL 精确匹配
+        let matchedFrameId: number | undefined
         if (info.src) {
             const urlMatches = childFrames.filter(f => f.url === info.src)
             if (urlMatches.length === 1) {
-                return {frameId: urlMatches[0].frameId}
+                matchedFrameId = urlMatches[0].frameId
             }
         }
 
         // 策略 2: 按 DOM 索引匹配
-        if (info.index >= 0 && info.index < childFrames.length) {
-            return {frameId: childFrames[info.index].frameId}
+        if (matchedFrameId === undefined && info.index >= 0 && info.index < childFrames.length) {
+            matchedFrameId = childFrames[info.index].frameId
         }
 
-        throw new Error(`Cannot resolve iframe to frameId. src: "${info.src}", childFrames: ${childFrames.length}`)
+        if (matchedFrameId === undefined) {
+            throw new Error(`Cannot resolve iframe to frameId. src: "${info.src}", childFrames: ${childFrames.length}`)
+        }
+
+        const offset = await this.getFrameOffset(tabId, matchedFrameId)
+        return {frameId: matchedFrameId, offset}
     }
 
     /**
@@ -1673,6 +1743,12 @@ export class ActionHandler {
 
     private async getTargetTabId(tabId?: number): Promise<number> {
         if (tabId !== undefined && tabId !== null) {
+            // 验证 tab 是否存在，避免对已关闭的 tab 操作时得到不明确的 Chrome API 错误
+            try {
+                await chrome.tabs.get(tabId)
+            } catch {
+                throw new Error(`Tab ${tabId} 不存在（可能已被关闭）`)
+            }
             return tabId
         }
 
@@ -2247,6 +2323,93 @@ function extractHtml(selector: string | null, outer: boolean): { html: string } 
         return {html: outer ? element.outerHTML : element.innerHTML}
     }
     return {html: document.documentElement.outerHTML}
+}
+
+// 提取 HTML + 图片元信息
+function extractHtmlWithImages(selector: string | null, outer: boolean): {
+    html: string
+    images: Array<{
+        index: number;
+        src: string;
+        dataSrc: string;
+        alt: string;
+        width: number;
+        height: number;
+        naturalWidth: number;
+        naturalHeight: number
+    }>
+} {
+    const root = selector ? document.querySelector(selector) : document.documentElement
+    if (!root) {
+        return {html: '', images: []}
+    }
+
+    const html = selector
+                 ? (outer ? root.outerHTML : (root as HTMLElement).innerHTML)
+                 : document.documentElement.outerHTML
+
+    // 收集范围内所有 <img> 元素（文档顺序），含 root 自身
+    const imgList: HTMLImageElement[] = []
+    if (root.tagName === 'IMG') {
+        imgList.push(root as HTMLImageElement)
+    }
+    root.querySelectorAll('img').forEach(img => imgList.push(img))
+    const images = imgList.map((img, index) => ({
+        index,
+        src: img.src,                       // 绝对 URL（浏览器已解析）
+        dataSrc: (() => { const raw = img.dataset.src || img.dataset.lazySrc || img.dataset.original || ''; if (!raw) return ''; try { return new URL(raw, location.href).href } catch { return raw } })(),  // 懒加载 URL（解析为绝对路径）
+        alt: img.alt,
+        width: img.width,                   // 渲染宽度
+        height: img.height,                 // 渲染高度
+        naturalWidth: img.naturalWidth,     // 原始宽度
+        naturalHeight: img.naturalHeight,   // 原始高度
+    }))
+
+    return {html, images}
+}
+
+// 提取页面元信息
+function extractMetadata(): Record<string, unknown> {
+    const meta = (name: string): string | undefined =>
+        (document.querySelector(`meta[name="${name}"],meta[property="${name}"]`) as HTMLMetaElement | null)
+            ?.content || undefined
+
+    return {
+        title: document.title,
+        description: meta('description'),
+        canonical: document.querySelector('link[rel="canonical"]')?.getAttribute('href') || undefined,
+        charset: document.characterSet,
+        viewport: meta('viewport'),
+        og: Object.fromEntries(
+            Array.from(document.querySelectorAll('meta[property^="og:"]'))
+                 .map(m => [m.getAttribute('property')!, (m as HTMLMetaElement).content ?? '']),
+        ),
+        twitter: Object.fromEntries(
+            Array.from(document.querySelectorAll('meta[name^="twitter:"]'))
+                 .map(m => [m.getAttribute('name')!, (m as HTMLMetaElement).content ?? '']),
+        ),
+        jsonLd: Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
+                     .map(s => {
+                         try {
+                             return JSON.parse(s.textContent ?? '')
+                         } catch {
+                             return null
+                         }
+                     })
+                     .filter(Boolean),
+        alternates: Array.from(document.querySelectorAll('link[rel="alternate"]'))
+                         .map(l => ({
+                             href: (l as HTMLLinkElement).href,
+                             type: l.getAttribute('type') || undefined,
+                             hreflang: l.getAttribute('hreflang') || undefined,
+                         })),
+        feeds: Array.from(document.querySelectorAll('link[type="application/rss+xml"],link[type="application/atom+xml"]'))
+                    .map(l => ({
+                        href: (l as HTMLLinkElement).href,
+                        type: l.getAttribute('type')!,
+                        title: l.getAttribute('title') || undefined,
+                    })),
+    }
 }
 
 // 提取属性

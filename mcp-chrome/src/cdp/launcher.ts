@@ -204,7 +204,14 @@ export class BrowserLauncher {
 
             this.process.on('exit', (code) => {
                 clearTimeout(timer)
-                if (code !== 0 && code !== null) {
+                if (code === 0) {
+                    // Chrome 退出码 0：通常是把请求委托给了已运行的实例后自行退出，
+                    // 此时没有 DevTools 端点可连接
+                    reject(new Error(
+                        '浏览器进程已退出（code 0），可能已有相同 profile 的 Chrome 实例在运行。\n'
+                        + '请关闭已运行的 Chrome 或指定不同的 userDataDir',
+                    ))
+                } else if (code !== null) {
                     reject(new Error(`浏览器进程退出，代码: ${code}\n${stderr}`))
                 }
             })

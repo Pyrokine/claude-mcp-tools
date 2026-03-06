@@ -181,7 +181,7 @@ export class ExtensionBridge {
         }) as { pageContent: string; viewport: { width: number; height: number }; error?: string }
     }
 
-    async screenshot(options?: { format?: string; quality?: number; fullPage?: boolean }): Promise<{
+    async screenshot(options?: { format?: string; quality?: number; fullPage?: boolean; clip?: { x: number; y: number; width: number; height: number } }): Promise<{
         data: string;
         format: string
     }> {
@@ -285,6 +285,21 @@ export class ExtensionBridge {
         return result.html
     }
 
+    async getHtmlWithImages(selector?: string, outer = true): Promise<{
+        html: string
+        images: Array<{ index: number; src: string; dataSrc: string; alt: string; width: number; height: number; naturalWidth: number; naturalHeight: number }>
+    }> {
+        return await this.httpServer.sendCommand('get_html_with_images', {
+            tabId: this.currentTabId,
+            frameId: this.currentFrameId || undefined,
+            selector,
+            outer,
+        }) as {
+            html: string
+            images: Array<{ index: number; src: string; dataSrc: string; alt: string; width: number; height: number; naturalWidth: number; naturalHeight: number }>
+        }
+    }
+
     async getAttribute(
         selector: string | undefined,
         refId: string | undefined,
@@ -298,6 +313,13 @@ export class ExtensionBridge {
             attribute,
         }) as { value: string | null }
         return result.value
+    }
+
+    async getMetadata(): Promise<Record<string, unknown>> {
+        return await this.httpServer.sendCommand('get_metadata', {
+            tabId: this.currentTabId,
+            frameId: this.currentFrameId || undefined,
+        }) as Record<string, unknown>
     }
 
     // ==================== Cookies ====================
@@ -502,6 +524,16 @@ export class ExtensionBridge {
         })
     }
 
+    async stealthClick(x: number, y: number, button = 'left'): Promise<void> {
+        await this.httpServer.sendCommand('stealth_click', {
+            tabId: this.currentTabId,
+            frameId: this.currentFrameId || undefined,
+            x,
+            y,
+            button,
+        })
+    }
+
     async stealthMouse(type: string, x: number, y: number, button = 'left'): Promise<void> {
         await this.httpServer.sendCommand('stealth_mouse', {
             tabId: this.currentTabId,
@@ -562,11 +594,11 @@ export class ExtensionBridge {
     /**
      * 解析 iframe 选择器/索引 → frameId
      */
-    async resolveFrame(frame: string | number): Promise<{ frameId: number }> {
+    async resolveFrame(frame: string | number): Promise<{ frameId: number; offset: { x: number; y: number } | null }> {
         return await this.httpServer.sendCommand('resolve_frame', {
             tabId: this.currentTabId,
             frame,
-        }) as { frameId: number }
+        }) as { frameId: number; offset: { x: number; y: number } | null }
     }
 
     private updateState(url: string, title: string): void {

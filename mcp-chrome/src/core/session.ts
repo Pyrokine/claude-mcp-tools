@@ -18,7 +18,10 @@ import {
     type ConsoleLogEntry,
     type Cookie,
     type CookieOptions,
+    type CdpResultObject,
     DEFAULT_TIMEOUT,
+    extractCdpValue,
+    formatCdpException,
     type LaunchOptions,
     MODIFIER_KEYS,
     type NetworkRequestEntry,
@@ -644,12 +647,15 @@ class SessionManager {
     /**
      * 截图
      */
-    async screenshot(fullPage = false, scale?: number, format?: string, quality?: number): Promise<string> {
+    async screenshot(fullPage = false, scale?: number, format?: string, quality?: number, clip?: { x: number; y: number; width: number; height: number }): Promise<string> {
         this.ensureSession()
 
         const captureParams: Record<string, unknown> = {format: format ?? 'png'}
         if (quality !== undefined) {
             captureParams.quality = quality
+        }
+        if (clip) {
+            captureParams.clip = {...clip, scale: scale ?? 1}
         }
 
         if (fullPage) {
@@ -865,13 +871,13 @@ class SessionManager {
                     callParams,
                     sendTimeout,
                 )) as {
-                    result: { value: T }
-                    exceptionDetails?: { exception: { description: string } }
+                    result: CdpResultObject<T>
+                    exceptionDetails?: { text: string; exception?: { description?: string } }
                 }
                 if (exceptionDetails) {
-                    throw new Error(exceptionDetails.exception.description)
+                    throw new Error(formatCdpException(exceptionDetails))
                 }
-                return result.value
+                return extractCdpValue<T>(result)
             } finally {
                 this.send('Runtime.releaseObject', {objectId: globalResult.objectId}).catch(() => {
                 })
@@ -887,15 +893,15 @@ class SessionManager {
             evalParams.timeout = timeout
         }
         const {result, exceptionDetails} = (await this.send('Runtime.evaluate', evalParams, sendTimeout)) as {
-            result: { value: T };
-            exceptionDetails?: { exception: { description: string } };
+            result: CdpResultObject<T>
+            exceptionDetails?: { text: string; exception?: { description?: string } }
         }
 
         if (exceptionDetails) {
-            throw new Error(exceptionDetails.exception.description)
+            throw new Error(formatCdpException(exceptionDetails))
         }
 
-        return result.value
+        return extractCdpValue<T>(result)
     }
 
     /**

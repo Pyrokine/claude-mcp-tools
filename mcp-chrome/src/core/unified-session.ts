@@ -8,8 +8,8 @@
 
 import {ExtensionBridge} from '../extension/index.js'
 import {getSession as getCdpSession} from './session.js'
-import type {TargetInfo, WaitUntil} from './types.js'
-import {MODIFIER_KEYS} from './types.js'
+import type {CdpResultObject, TargetInfo, WaitUntil} from './types.js'
+import {extractCdpValue, formatCdpException, MODIFIER_KEYS} from './types.js'
 
 export type ConnectionMode = 'extension' | 'cdp' | 'none'
 export type InputMode = 'stealth' | 'precise'  // stealth=JS模拟, precise=debugger API
@@ -30,6 +30,7 @@ class UnifiedSessionManager {
     private lastConnectionFailure                          = 0
     private tabSwitchLock: Promise<void>                   = Promise.resolve()  // 串行化 tab 切换，防止并发竞态
     private requireExtension                               = false  // 指定 tabId 或 frame 时为 true，禁止 CDP 回退
+    private currentFrameOffset: { x: number; y: number } | null = null  // iframe 在主页面的偏移量（withFrame 期间有效）
 
     private constructor() {
     }
@@ -78,6 +79,13 @@ class UnifiedSessionManager {
      */
     getInputMode(): InputMode {
         return this.inputMode
+    }
+
+    /**
+     * 获取当前 iframe 在主页面的偏移量（仅 withFrame 期间有效）
+     */
+    getFrameOffset(): { x: number; y: number } | null {
+        return this.currentFrameOffset
     }
 
     /**
@@ -275,14 +283,15 @@ class UnifiedSessionManager {
         format?: string;
         quality?: number;
         fullPage?: boolean;
-        scale?: number
+        scale?: number;
+        clip?: { x: number; y: number; width: number; height: number }
     }): Promise<string> {
         if (await this.ensureExtensionConnected()) {
             const result = await this.extensionBridge!.screenshot(options)
             return result.data
         }
 
-        return getCdpSession().screenshot(options?.fullPage, options?.scale, options?.format, options?.quality)
+        return getCdpSession().screenshot(options?.fullPage, options?.scale, options?.format, options?.quality, options?.clip)
     }
 
     /**
@@ -354,16 +363,18 @@ class UnifiedSessionManager {
             expression    = `(${code})(${argsStr})`
         }
 
+        const cdpScript = hasArgs ? code : expression
+
         if (timeout !== undefined) {
             // 轮询上下文：快速失败，端到端预算受控
             if (!this.isExtensionConnected()) {
                 this.assertCdpFallbackAllowed()
-                return getCdpSession().evaluate<T>(code, args, timeout)
+                return getCdpSession().evaluate<T>(cdpScript, args, timeout)
             }
         } else {
             // 非轮询上下文：允许等待重连；连接失败时回退 CDP
             if (!(await this.ensureExtensionConnected())) {
-                return getCdpSession().evaluate<T>(code, args, timeout)
+                return getCdpSession().evaluate<T>(cdpScript, args, timeout)
             }
         }
 
@@ -387,13 +398,13 @@ class UnifiedSessionManager {
                     iframeExpression,
                     timeout,
                 ) as {
-                    result?: { value?: T }
-                    exceptionDetails?: { text: string }
+                    result?: CdpResultObject<T>
+                    exceptionDetails?: { text: string; exception?: { className?: string; description?: string } }
                 }
                 if (result.exceptionDetails) {
-                    throw new Error(result.exceptionDetails.text)
+                    throw new Error(formatCdpException(result.exceptionDetails))
                 }
-                return result.result?.value as T
+                return extractCdpValue<T>(result.result)
             }
 
             // 主 frame，无 args：直接 Runtime.evaluate
@@ -407,14 +418,14 @@ class UnifiedSessionManager {
             }
             // timeout 即端到端预算，直接作为 RPC 超时（不额外加 margin）
             const result = await this.extensionBridge!.debuggerSend('Runtime.evaluate', params, undefined, timeout) as {
-                result?: { value?: T }
-                exceptionDetails?: { text: string }
+                result?: CdpResultObject<T>
+                exceptionDetails?: { text: string; exception?: { className?: string; description?: string } }
             }
 
             if (result.exceptionDetails) {
-                throw new Error(result.exceptionDetails.text)
+                throw new Error(formatCdpException(result.exceptionDetails))
             }
-            return result.result?.value as T
+            return extractCdpValue<T>(result.result)
         }
         return await this.extensionBridge!.evaluate(expression, timeout, timeout) as T
     }
@@ -452,6 +463,123 @@ class UnifiedSessionManager {
             )
         }
         return getCdpSession().evaluate<string>('document.documentElement.outerHTML')
+    }
+
+    /**
+     * 获取页面 HTML + 图片元信息
+     */
+    async getHtmlWithImages(selector?: string, outer = true): Promise<{
+        html: string
+        images: Array<{ index: number; src: string; dataSrc: string; alt: string; width: number; height: number; naturalWidth: number; naturalHeight: number }>
+    }> {
+        if (await this.ensureExtensionConnected()) {
+            return this.extensionBridge!.getHtmlWithImages(selector, outer)
+        }
+
+        // CDP 模式：evaluate 注入函数
+        const selectorArg = JSON.stringify(selector ?? null)
+        return getCdpSession().evaluate<{
+            html: string
+            images: Array<{ index: number; src: string; dataSrc: string; alt: string; width: number; height: number; naturalWidth: number; naturalHeight: number }>
+        }>(`(function() {
+            var root = ${selectorArg} ? document.querySelector(${selectorArg}) : document.documentElement;
+            if (!root) return {html: '', images: []};
+            var html = ${selectorArg}
+                ? (${outer} ? root.outerHTML : root.innerHTML)
+                : document.documentElement.outerHTML;
+            var imgList = [];
+            if (root.tagName === 'IMG') imgList.push(root);
+            root.querySelectorAll('img').forEach(function(img) { imgList.push(img); });
+            var images = [];
+            for (var i = 0; i < imgList.length; i++) {
+                var img = imgList[i];
+                images.push({index: i, src: img.src, dataSrc: (function() { var raw = img.dataset.src || img.dataset.lazySrc || img.dataset.original || ''; if (!raw) return ''; try { return new URL(raw, location.href).href } catch(e) { return raw } })(), alt: img.alt, width: img.width, height: img.height, naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight});
+            }
+            return {html: html, images: images};
+        })()`)
+    }
+
+    /**
+     * 获取页面元信息
+     */
+    async getMetadata(): Promise<Record<string, unknown>> {
+        if (await this.ensureExtensionConnected()) {
+            return this.extensionBridge!.getMetadata()
+        }
+
+        // CDP 模式：evaluate 注入函数
+        return getCdpSession().evaluate<Record<string, unknown>>(`(function() {
+            function meta(name) {
+                var el = document.querySelector('meta[name="'+name+'"],meta[property="'+name+'"]');
+                return el ? el.content || undefined : undefined;
+            }
+            var og = {}, tw = {};
+            document.querySelectorAll('meta[property^="og:"]').forEach(function(m) { og[m.getAttribute('property')] = m.content || ''; });
+            document.querySelectorAll('meta[name^="twitter:"]').forEach(function(m) { tw[m.getAttribute('name')] = m.content || ''; });
+            var jsonLd = [];
+            document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s) {
+                try { jsonLd.push(JSON.parse(s.textContent || '')); } catch(e) {}
+            });
+            var alternates = [];
+            document.querySelectorAll('link[rel="alternate"]').forEach(function(l) {
+                alternates.push({href: l.href, type: l.getAttribute('type') || undefined, hreflang: l.getAttribute('hreflang') || undefined});
+            });
+            var feeds = [];
+            document.querySelectorAll('link[type="application/rss+xml"],link[type="application/atom+xml"]').forEach(function(l) {
+                feeds.push({href: l.href, type: l.getAttribute('type'), title: l.getAttribute('title') || undefined});
+            });
+            return {
+                title: document.title,
+                description: meta('description'),
+                canonical: (document.querySelector('link[rel="canonical"]') || {}).href || undefined,
+                charset: document.characterSet,
+                viewport: meta('viewport'),
+                og: og, twitter: tw, jsonLd: jsonLd, alternates: alternates, feeds: feeds
+            };
+        })()`)
+    }
+
+    /**
+     * 批量从浏览器缓存获取资源内容
+     *
+     * 只调用一次 Page.enable + Page.getFrameTree，然后逐个获取资源。
+     * 并发限制避免 CDP 连接拥塞。
+     */
+    async getResourceContentBatch(urls: string[], concurrency = 6): Promise<Map<string, { content: string; base64Encoded: boolean }>> {
+        const results = new Map<string, { content: string; base64Encoded: boolean }>()
+        if (urls.length === 0) {
+            return results
+        }
+
+        try {
+            await this.sendCdpCommand('Page.enable')
+            const frameTree = await this.sendCdpCommand('Page.getFrameTree') as {
+                frameTree: { frame: { id: string } }
+            }
+            const frameId = frameTree.frameTree.frame.id
+
+            // 并发控制
+            let idx = 0
+            const next = async (): Promise<void> => {
+                while (idx < urls.length) {
+                    const url = urls[idx++]
+                    try {
+                        const result = await this.sendCdpCommand('Page.getResourceContent', {frameId, url}) as {
+                            content: string
+                            base64Encoded: boolean
+                        }
+                        results.set(url, result)
+                    } catch {
+                        // 单个资源获取失败不影响其他
+                    }
+                }
+            }
+            await Promise.all(Array.from({length: Math.min(concurrency, urls.length)}, () => next()))
+        } catch {
+            // Page.enable 或 getFrameTree 失败，返回空结果
+        }
+
+        return results
     }
 
     /**
@@ -786,15 +914,18 @@ class UnifiedSessionManager {
             throw new Error('iframe 穿透需要 Extension 模式')
         }
 
-        const {frameId}                = await this.extensionBridge!.resolveFrame(frame)
+        const {frameId, offset}        = await this.extensionBridge!.resolveFrame(frame)
         const previousFrameId          = this.extensionBridge!.getCurrentFrameId()
+        const previousFrameOffset      = this.currentFrameOffset
         const previousRequireExtension = this.requireExtension
         this.extensionBridge!.setCurrentFrameId(frameId)
-        this.requireExtension = true
+        this.currentFrameOffset = offset
+        this.requireExtension   = true
         try {
             return await fn()
         } finally {
-            this.requireExtension = previousRequireExtension
+            this.requireExtension   = previousRequireExtension
+            this.currentFrameOffset = previousFrameOffset
             this.extensionBridge!.setCurrentFrameId(previousFrameId)
         }
     }
@@ -935,12 +1066,29 @@ class UnifiedSessionManager {
                     'mouseReleased',
                     x,
                     y,
-                    {button: effectiveButton, modifiers: this.modifiers},
+                    {button: effectiveButton, clickCount: 1, modifiers: this.modifiers},
                 )
             }
             return
         }
         await getCdpSession().mouseUp(effectiveButton)
+    }
+
+    /**
+     * 鼠标点击（mousedown + mouseup + click 三合一）
+     *
+     * stealth 模式：原子操作（单次脚本注入完成 mouseover → mousedown → focus → mouseup → click）
+     * precise / CDP 模式：mouseDown + mouseUp，浏览器自动合成原生 click 事件
+     */
+    async mouseClick(button: 'left' | 'middle' | 'right' | 'back' | 'forward' = 'left'): Promise<void> {
+        if (this.inputMode === 'stealth' && await this.ensureExtensionConnected()) {
+            const effectiveButton = (button === 'back' || button === 'forward') ? 'left' : button
+            const {x, y}         = this.currentMousePosition
+            await this.extensionBridge!.stealthClick(x, y, effectiveButton)
+            return
+        }
+        await this.mouseDown(button)
+        await this.mouseUp(button)
     }
 
     // ==================== 键鼠输入 ====================
@@ -1197,13 +1345,13 @@ class UnifiedSessionManager {
                 undefined,
                 timeout,
             ) as {
-                result?: { value?: T }
-                exceptionDetails?: { text: string }
+                result?: CdpResultObject<T>
+                exceptionDetails?: { text: string; exception?: { className?: string; description?: string } }
             }
             if (result.exceptionDetails) {
-                throw new Error(result.exceptionDetails.text)
+                throw new Error(formatCdpException(result.exceptionDetails))
             }
-            return result.result?.value as T
+            return extractCdpValue<T>(result.result)
         } finally {
             this.extensionBridge!.debuggerSend('Runtime.releaseObject', {
                 objectId: globalResult.result.objectId,
@@ -1254,4 +1402,3 @@ class UnifiedSessionManager {
 export function getUnifiedSession(): UnifiedSessionManager {
     return UnifiedSessionManager.getInstance()
 }
-

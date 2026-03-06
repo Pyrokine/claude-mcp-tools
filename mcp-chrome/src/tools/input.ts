@@ -21,7 +21,7 @@ import {targetToFindParams, targetZodSchema} from './schema.js'
  */
 const inputEventSchema = z.object({
                                       type: z.enum([
-                                                       'keydown', 'keyup', 'mousedown', 'mouseup', 'mousemove',
+                                                       'keydown', 'keyup', 'click', 'mousedown', 'mouseup', 'mousemove',
                                                        'wheel', 'touchstart', 'touchmove', 'touchend', 'type', 'wait',
                                                    ]).describe('事件类型'),
                                       key: z.string().optional().describe('按键（keydown/keyup）'),
@@ -29,7 +29,7 @@ const inputEventSchema = z.object({
                                                .optional()
                                                .describe('鼠标按钮'),
                                       target: targetZodSchema.optional().describe(
-                                          '目标元素（mousemove/touchstart/touchmove 必填；mousedown/wheel/type 可选，用于先定位再操作）'),
+                                          '目标元素（mousemove/touchstart/touchmove 必填；click/mousedown/wheel/type 可选，用于先定位再操作）'),
                                       steps: z.number().optional().describe('移动步数（mousemove/touchmove）'),
                                       deltaX: z.number().optional().describe('水平滚动量'),
                                       deltaY: z.number().optional().describe('垂直滚动量'),
@@ -119,6 +119,15 @@ async function executeEventExtension(
             break
         }
 
+        case 'click': {
+            if (event.target) {
+                const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
+                await unifiedSession.mouseMove(point.x, point.y)
+            }
+            await unifiedSession.mouseClick(event.button ?? 'left')
+            break
+        }
+
         case 'mousedown': {
             if (event.target) {
                 const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
@@ -192,8 +201,7 @@ async function executeEventExtension(
             if (event.target) {
                 const point = await getTargetPointExtension(unifiedSession, event.target, timeout)
                 await unifiedSession.mouseMove(point.x, point.y)
-                await unifiedSession.mouseDown('left')
-                await unifiedSession.mouseUp('left')
+                await unifiedSession.mouseClick('left')
             }
 
             const delay = event.delay ?? 0
@@ -223,14 +231,29 @@ async function executeEventExtension(
 
 /**
  * Extension 模式：获取目标点坐标
+ *
+ * iframe 坐标系修正：
+ * - 原始坐标 {x, y}：用户意图为 iframe 相对坐标
+ *   - precise 模式需加 offset 转为视口绝对坐标（CDP 用绝对坐标）
+ *   - stealth 模式直接使用（在 iframe 内派发，本身就是相对坐标）
+ * - 元素定位：find() 返回视口绝对坐标
+ *   - precise 模式直接使用
+ *   - stealth 模式需减 offset 转为 iframe 相对坐标
  */
 async function getTargetPointExtension(
     unifiedSession: ReturnType<typeof getUnifiedSession>,
     target: Target,
     timeout?: number,
 ): Promise<{ x: number; y: number }> {
-    // 如果是坐标，直接返回
+    const frameOffset = unifiedSession.getFrameOffset()
+    const isStealth   = unifiedSession.getInputMode() === 'stealth'
+
+    // 原始坐标：用户意图为 iframe 相对坐标
     if ('x' in target && 'y' in target) {
+        if (frameOffset && !isStealth) {
+            // precise: 转为视口绝对坐标
+            return {x: target.x + frameOffset.x, y: target.y + frameOffset.y}
+        }
         return {x: target.x, y: target.y}
     }
 
@@ -244,11 +267,18 @@ async function getTargetPointExtension(
     if (nth >= elements.length) {
         throw new Error(`第 ${nth} 个匹配元素不存在（共 ${elements.length} 个）`)
     }
-    const rect = elements[nth].rect
-    return {
+    const rect  = elements[nth].rect
+    const point = {
         x: rect.x + rect.width / 2,
         y: rect.y + rect.height / 2,
     }
+
+    // 元素定位：find() 返回视口绝对坐标
+    if (frameOffset && isStealth) {
+        // stealth: 转回 iframe 相对坐标
+        return {x: point.x - frameOffset.x, y: point.y - frameOffset.y}
+    }
+    return point
 }
 
 /**
@@ -274,6 +304,15 @@ async function executeEvent(
                 throw new Error('keyup 事件需要 key 参数')
             }
             await session.keyUp(event.key)
+            break
+        }
+
+        case 'click': {
+            if (event.target) {
+                await moveToTarget(session, event.target, humanize, timeout)
+            }
+            await session.mouseDown(event.button ?? 'left')
+            await session.mouseUp(event.button ?? 'left')
             break
         }
 

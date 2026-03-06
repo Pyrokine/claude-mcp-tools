@@ -64,6 +64,14 @@ async function cleanup(): Promise<void> {
  * 主函数
  */
 async function main(): Promise<void> {
+    // 全局错误兜底：防止未捕获的异常/rejection 杀死进程
+    process.on('uncaughtException', (error) => {
+        console.error('[MCP] Uncaught exception:', error)
+    })
+    process.on('unhandledRejection', (reason) => {
+        console.error('[MCP] Unhandled rejection:', reason)
+    })
+
     // 启动 Extension HTTP/WebSocket 服务器
     await getUnifiedSession().startExtensionServer()
 

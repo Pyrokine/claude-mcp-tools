@@ -91,10 +91,11 @@ export interface ReadPageResult {
 
 export interface ScreenshotParams {
     tabId?: number
-    format?: 'png' | 'jpeg'
+    format?: 'png' | 'jpeg' | 'webp'
     quality?: number
     fullPage?: boolean
     scale?: number  // 缩放比例（默认 1），低于 1 可降低分辨率加速全页截图
+    clip?: { x: number; y: number; width: number; height: number }
 }
 
 export interface ScreenshotResult {

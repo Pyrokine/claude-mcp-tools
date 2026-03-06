@@ -14,6 +14,41 @@ export const MODIFIER_KEYS: Record<string, number> = {
     Alt: 1, Control: 2, Meta: 4, Shift: 8,
 }
 
+// ==================== CDP Runtime 响应类型 ====================
+
+/** CDP Runtime.evaluate / callFunctionOn 响应中的异常详情 */
+export interface CdpExceptionDetails {
+    text: string
+    exception?: { className?: string; description?: string }
+}
+
+/** CDP Runtime.evaluate / callFunctionOn 响应中的结果对象 */
+export interface CdpResultObject<T = unknown> {
+    type: string
+    subtype?: string
+    className?: string
+    description?: string
+    value?: T
+}
+
+/** 从 CDP exceptionDetails 提取有用的错误信息（含完整堆栈） */
+export function formatCdpException(details: CdpExceptionDetails): string {
+    return details.exception?.description ?? details.text ?? 'Unknown error'
+}
+
+/** 从 CDP result 提取返回值，不可序列化时抛出诊断错误 */
+export function extractCdpValue<T>(result?: CdpResultObject<T>): T {
+    if (!result || (result.value === undefined && result.type !== 'undefined')) {
+        const typeName = result?.className ?? result?.subtype ?? result?.type ?? 'unknown'
+        const preview  = result?.description ? ` (${result.description.substring(0, 200)})` : ''
+        throw new Error(
+            `返回值类型 ${typeName}${preview} 无法序列化。` +
+            '请在脚本中用 JSON.stringify() 包装返回值，或将需要的属性提取为简单类型',
+        )
+    }
+    return result.value as T
+}
+
 /**
  * 统一的元素定位目标
  *
@@ -67,6 +102,7 @@ export type MouseButton = 'left' | 'middle' | 'right' | 'back' | 'forward';
 export type InputEventType =
     | 'keydown'
     | 'keyup'
+    | 'click'
     | 'mousedown'
     | 'mouseup'
     | 'mousemove'
