@@ -138,6 +138,8 @@ Extension 特有：`list` 返回 `managed` 字段（Tab 是否在 MCP Chrome 分
 | `touchstart` / `touchmove` / `touchend` | 触摸事件    |
 | `type`                                  | 输入文本    |
 | `wait`                                  | 事件间暂停   |
+| `select`                                | 按内容选中文本（鼠标模拟） |
+| `replace`                               | 查找并替换文本 |
 
 参数：`humanize` 启用贝塞尔曲线移动和随机延迟。`tabId` 指定目标 Tab。`frame` 指定目标 iframe（CSS 选择器或索引）。均限
 Extension 模式。

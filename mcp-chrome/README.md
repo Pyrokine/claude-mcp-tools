@@ -133,16 +133,18 @@ it's the current operation target). `open` auto-creates tab group (cyan color).
 
 Event sequence model supporting arbitrary combinations:
 
-| Event Type                              | Description                |
-|-----------------------------------------|----------------------------|
-| `keydown` / `keyup`                     | Key press/release          |
-| `click`                                 | Click (mousedown + mouseup)  |
-| `mousedown` / `mouseup`                 | Mouse button press/release |
-| `mousemove`                             | Mouse movement             |
-| `wheel`                                 | Mouse wheel scroll         |
-| `touchstart` / `touchmove` / `touchend` | Touch events               |
-| `type`                                  | Type text                  |
-| `wait`                                  | Pause between events       |
+| Event Type                              | Description                         |
+|-----------------------------------------|-------------------------------------|
+| `keydown` / `keyup`                     | Key press/release                   |
+| `click`                                 | Click (mousedown + mouseup)         |
+| `mousedown` / `mouseup`                 | Mouse button press/release          |
+| `mousemove`                             | Mouse movement                      |
+| `wheel`                                 | Mouse wheel scroll                  |
+| `touchstart` / `touchmove` / `touchend` | Touch events                        |
+| `type`                                  | Type text                           |
+| `wait`                                  | Pause between events                |
+| `select`                                | Select text by content (mouse sim)  |
+| `replace`                               | Find and replace text               |
 
 Parameters: `humanize` enables Bézier curve movement and random delays. `tabId` targets a specific tab. `frame` targets
 an iframe (CSS selector or index). Both Extension mode only.
