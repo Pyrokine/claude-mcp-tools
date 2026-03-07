@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 
 /// 配置
@@ -39,5 +40,17 @@ impl Config {
     /// 获取项目目录
     pub fn project_dir(&self, project_id: &str) -> PathBuf {
         self.projects_dir.join(project_id)
+    }
+
+    /// 列出所有项目目录
+    pub fn list_project_dirs(&self) -> std::io::Result<Vec<(String, PathBuf)>> {
+        let mut dirs = Vec::new();
+        for entry in fs::read_dir(&self.projects_dir)?.flatten() {
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                let id = entry.file_name().to_string_lossy().to_string();
+                dirs.push((id, entry.path()));
+            }
+        }
+        Ok(dirs)
     }
 }

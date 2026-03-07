@@ -161,21 +161,11 @@ pub fn search(config: &Config, params: SearchParams) -> Result<SearchResponse, E
 /// 获取要搜索的项目目录
 fn get_project_dirs(config: &Config, params: &SearchParams) -> Result<Vec<(String, PathBuf)>, ErrorResponse> {
     if params.all_projects {
-        // 搜索所有项目
-        let entries = std::fs::read_dir(&config.projects_dir).map_err(|e| ErrorResponse {
+        return config.list_project_dirs().map_err(|e| ErrorResponse {
             error: "io_error".to_string(),
             message: format!("无法读取项目目录: {}", e),
             available: None,
-        })?;
-
-        let mut dirs = Vec::new();
-        for entry in entries.flatten() {
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                let id = entry.file_name().to_string_lossy().to_string();
-                dirs.push((id, entry.path()));
-            }
-        }
-        return Ok(dirs);
+        });
     }
 
     if !params.projects.is_empty() {
@@ -211,16 +201,13 @@ fn get_project_dirs(config: &Config, params: &SearchParams) -> Result<Vec<(Strin
 
 /// 列出可用项目
 fn list_available_projects(config: &Config) -> serde_json::Value {
-    let mut projects = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&config.projects_dir) {
-        for entry in entries.flatten() {
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                let id = entry.file_name().to_string_lossy().to_string();
-                let path = id.replace('-', "/");
-                projects.push(serde_json::json!({ "id": id, "path": path }));
-            }
-        }
-    }
+    let projects: Vec<_> = config.list_project_dirs().unwrap_or_default()
+        .into_iter()
+        .map(|(id, _)| {
+            let path = id.replace('-', "/");
+            serde_json::json!({ "id": id, "path": path })
+        })
+        .collect();
     serde_json::json!(projects)
 }
 
@@ -261,6 +248,13 @@ fn collect_jsonl_files(
                             let filename = entry.file_name().to_string_lossy().to_string();
                             if filename.starts_with("agent-") {
                                 let session_id = filename.strip_suffix(".jsonl").unwrap_or(&filename).to_string();
+                                // 过滤 sessions
+                                if !sessions.is_empty() {
+                                    let prefix = ref_prefix(&session_id);
+                                    if !sessions.iter().any(|s| s == &session_id || s == &prefix) {
+                                        continue;
+                                    }
+                                }
                                 files.push((project_id.clone(), session_id, path));
                             }
                         }

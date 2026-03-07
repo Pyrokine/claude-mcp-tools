@@ -127,21 +127,12 @@ pub fn find_session_file(
     } else if let Some(pid) = config.current_project_id() {
         vec![(pid.clone(), config.project_dir(&pid))]
     } else {
-        // 搜索所有项目
-        let mut dirs = Vec::new();
-        if let Ok(entries) = fs::read_dir(&config.projects_dir) {
-            for entry in entries.flatten() {
-                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                    let id = entry.file_name().to_string_lossy().to_string();
-                    dirs.push((id, entry.path()));
-                }
-            }
-        }
-        dirs
+        config.list_project_dirs().unwrap_or_default()
     };
 
     // 在项目中查找匹配的 session
     for (project_id, dir) in project_dirs {
+        // 搜索主目录的 .jsonl 文件
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -153,6 +144,28 @@ pub fn find_session_file(
                 if let Some(session_id) = session_id_from_filename(&filename) {
                     if ref_prefix(&session_id) == session_prefix {
                         return Ok((project_id, session_id, path));
+                    }
+                }
+            }
+        }
+
+        // 搜索 subagents 目录中的 agent session
+        let subagents_pattern = dir.join("*/subagents");
+        if let Ok(entries) = glob::glob(&subagents_pattern.to_string_lossy()) {
+            for subdir in entries.flatten() {
+                if let Ok(sub_entries) = fs::read_dir(&subdir) {
+                    for entry in sub_entries.flatten() {
+                        let path = entry.path();
+                        if !path.extension().map(|e| e == "jsonl").unwrap_or(false) {
+                            continue;
+                        }
+                        let filename = entry.file_name().to_string_lossy().to_string();
+                        if filename.starts_with("agent-") {
+                            let session_id = filename.strip_suffix(".jsonl").unwrap_or(&filename).to_string();
+                            if ref_prefix(&session_id) == session_prefix {
+                                return Ok((project_id, session_id, path));
+                            }
+                        }
                     }
                 }
             }

@@ -58,7 +58,9 @@ claude mcp add mcp-claude-history -- mcp-claude-history --mcp
   "mcpServers": {
     "mcp-claude-history": {
       "command": "mcp-claude-history",
-      "args": ["--mcp"]
+      "args": [
+        "--mcp"
+      ]
     }
   }
 }
