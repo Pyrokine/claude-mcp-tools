@@ -251,3 +251,19 @@ pub fn parse_range(s: &str) -> Option<(usize, usize)> {
         None
     }
 }
+
+/// 将项目 ID 还原为可读路径（仅用于展示）
+/// Linux:   -home-py-CLion-dev → /home/py/CLion/dev
+/// Windows: D--Prog-python-harvester → D:/Prog/python/harvester
+pub fn project_id_to_display_path(id: &str) -> String {
+    // Windows 格式：以大写字母开头 + "--"（原始为 "盘符:-"，: 和 / 都变成了 -）
+    // 例如 "D--Prog-python-harvester" → "D:/Prog/python/harvester"
+    if id.len() >= 3 && id.as_bytes()[0].is_ascii_alphabetic() && id[1..].starts_with("--") {
+        let drive = &id[..1];
+        let rest = &id[3..]; // 跳过 "X--"
+        return format!("{}:/{}", drive, rest.replace('-', "/"));
+    }
+    // Linux/Mac 格式：以 "-" 开头
+    // 例如 "-home-py-CLion-dev" → "/home/py/CLion/dev"
+    id.replace('-', "/")
+}

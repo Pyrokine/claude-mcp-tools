@@ -287,10 +287,11 @@ fn handle_roots_response(response: &Value) {
         if let Some(roots) = result.get("roots").and_then(|r| r.as_array()) {
             for root in roots {
                 if let Some(uri) = root.get("uri").and_then(|u| u.as_str()) {
-                    // uri 格式: file:///path/to/project
+                    // uri 格式: file:///path/to/project (Linux/Mac)
+                    //           file:///C:/path/to/project (Windows)
                     if let Some(path) = uri.strip_prefix("file://") {
-                        // 从路径推断 project ID
-                        if let Some(project_id) = path_to_project_id(path) {
+                        let path = strip_file_uri_prefix(path);
+                        if let Some(project_id) = path_to_project_id(&path) {
                             CLIENT_PROJECT.with(|p| {
                                 *p.borrow_mut() = Some(project_id);
                             });
@@ -303,16 +304,28 @@ fn handle_roots_response(response: &Value) {
     }
 }
 
+/// 处理 file:// URI 去除前缀后的路径
+/// Linux/Mac: file:///home/py → strip "file://" → "/home/py" → 保持不变
+/// Windows:   file:///C:/Prog → strip "file://" → "/C:/Prog" → 去掉前导 "/" 得到 "C:/Prog"
+fn strip_file_uri_prefix(path: &str) -> String {
+    // Windows file URI: /C:/... 或 /D:/...（前导 / + 盘符 + :）
+    if path.len() >= 3 && path.starts_with('/') && path.as_bytes()[2] == b':' {
+        return path[1..].to_string();
+    }
+    path.to_string()
+}
+
 /// 将路径转换为 project ID
-/// 路径格式: /home/py/CLion/dev_xxx → -home-py-CLion-dev-xxx
-/// Claude Code 会把 `/` 和 `_` 都替换成 `-`，并保留前导 `-`
+/// Linux:   /home/py/CLion/dev_xxx → -home-py-CLion-dev-xxx
+/// Windows: D:/Prog/python/harvester → D--Prog-python-harvester
+/// Claude Code 会把 `/`、`\`、`_` 都替换成 `-`，`:` 也替换成 `-`
 fn path_to_project_id(path: &str) -> Option<String> {
-    let path = path.trim_end_matches('/');
+    let path = path.trim_end_matches('/').trim_end_matches('\\');
     if path.is_empty() {
         return None;
     }
-    // Claude Code 的转换规则：/ 和 _ 都变成 -，且必须以 - 开头
-    let id = path.replace('/', "-").replace('_', "-");
+    // Claude Code 的转换规则：/、\、:、_ 都变成 -
+    let id = path.replace('\\', "-").replace('/', "-").replace(':', "-").replace('_', "-");
     if id.starts_with('-') {
         Some(id)
     } else {

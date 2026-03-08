@@ -19,7 +19,7 @@ pub fn list_projects(config: &Config) -> Result<ProjectsResponse, ErrorResponse>
         }
 
         let id = entry.file_name().to_string_lossy().to_string();
-        let path = id.replace('-', "/");
+        let path = project_id_to_display_path(&id);
         let dir = entry.path();
 
         // 统计会话数量和最后活动时间

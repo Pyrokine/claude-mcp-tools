@@ -204,7 +204,7 @@ fn list_available_projects(config: &Config) -> serde_json::Value {
     let projects: Vec<_> = config.list_project_dirs().unwrap_or_default()
         .into_iter()
         .map(|(id, _)| {
-            let path = id.replace('-', "/");
+            let path = project_id_to_display_path(&id);
             serde_json::json!({ "id": id, "path": path })
         })
         .collect();
