@@ -158,7 +158,16 @@ class UnifiedSessionManager {
     /**
      * 列出所有页面
      */
-    async listTargets(): Promise<Array<TargetInfo & { mode: ConnectionMode; managed?: boolean; isActive?: boolean }>> {
+    async listTargets(): Promise<Array<TargetInfo & {
+        mode: ConnectionMode
+        managed?: boolean
+        isActive?: boolean
+        windowId?: number
+        index?: number
+        pinned?: boolean
+        incognito?: boolean
+        status?: string
+    }>> {
         // 优先使用 Extension，如果断开则等待重连
         if (await this.ensureExtensionConnected()) {
             const tabs         = await this.extensionBridge!.listTabs()
@@ -171,6 +180,11 @@ class UnifiedSessionManager {
                 mode: 'extension' as ConnectionMode,
                 managed: tab.managed,
                 isActive: tab.id === currentTabId,
+                windowId: tab.windowId,
+                index: tab.index,
+                pinned: tab.pinned,
+                incognito: tab.incognito,
+                status: tab.status,
             }))
         }
 

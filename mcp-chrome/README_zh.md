@@ -121,8 +121,8 @@ browse(action="open", url="https://example.com")
 | `refresh` | 刷新                    |
 | `close`   | 关闭浏览器连接               |
 
-Extension 特有：`list` 返回 `managed` 字段（Tab 是否在 MCP Chrome 分组中）和 `isActive` 字段（是否为当前操作目标）。`open`
-自动创建 Tab 分组（cyan 色）。
+Extension 特有：`list` 返回额外字段：`managed`（Tab 是否在 MCP Chrome 分组中）、`isActive`（是否为当前操作目标）、
+`windowId`、`index`、`pinned`、`incognito`、`status`（`loading`/`complete`）。`open` 自动创建 Tab 分组（cyan 色）。
 
 ### input - 键鼠输入
 

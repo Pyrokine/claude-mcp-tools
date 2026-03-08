@@ -339,7 +339,10 @@ export class ActionHandler {
             title: tab.title || '',
             active: tab.active,
             windowId: tab.windowId,
+            index: tab.index,
             groupId: tab.groupId,
+            pinned: tab.pinned,
+            incognito: tab.incognito,
             managed: context.mcpTabGroupId !== null && tab.groupId === context.mcpTabGroupId,
             status: tab.status || 'unknown',
         }))
@@ -397,7 +400,10 @@ export class ActionHandler {
             title: tab.title || '',
             active: tab.active,
             windowId: tab.windowId,
+            index: tab.index,
             groupId: actualGroupId,
+            pinned: tab.pinned,
+            incognito: tab.incognito,
             managed: true,  // 新创建的 tab 自动加入 MCP Chrome 分组
             status: tab.status || 'unknown',
         }
@@ -434,7 +440,10 @@ export class ActionHandler {
             title: tab.title || '',
             active: tab.active,
             windowId: tab.windowId,
+            index: tab.index,
             groupId: tab.groupId,
+            pinned: tab.pinned,
+            incognito: tab.incognito,
             managed: context.mcpTabGroupId !== null && tab.groupId === context.mcpTabGroupId,
             status: tab.status || 'unknown',
         }
@@ -460,7 +469,10 @@ export class ActionHandler {
             title: tab.title || '',
             active: tab.active,
             windowId: tab.windowId,
+            index: tab.index,
             groupId: tab.groupId,
+            pinned: tab.pinned,
+            incognito: tab.incognito,
             managed: context.mcpTabGroupId !== null && tab.groupId === context.mcpTabGroupId,
             status: tab.status || 'unknown',
         }

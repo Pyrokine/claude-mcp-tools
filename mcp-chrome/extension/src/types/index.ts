@@ -10,7 +10,10 @@ export interface TabInfo {
     title: string
     active: boolean
     windowId: number
+    index: number
     groupId: number
+    pinned: boolean
+    incognito: boolean
     managed: boolean  // 是否属于 MCP Chrome 分组
     status: string
 }

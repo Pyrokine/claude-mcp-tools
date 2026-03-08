@@ -126,8 +126,9 @@ browse(action="open", url="https://example.com")
 | `refresh` | Reload page                           |
 | `close`   | Close browser connection              |
 
-Extension-specific: `list` returns `managed` field (whether tab is in MCP Chrome group) and `isActive` field (whether
-it's the current operation target). `open` auto-creates tab group (cyan color).
+Extension-specific: `list` returns additional fields: `managed` (whether tab is in MCP Chrome group), `isActive`
+(whether it's the current operation target), `windowId`, `index`, `pinned`, `incognito`, `status` (`loading`/`complete`).
+`open` auto-creates tab group (cyan color).
 
 ### input - Keyboard & Mouse Input
 

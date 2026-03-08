@@ -66,8 +66,13 @@ export class ExtensionBridge {
         url: string
         title: string
         active: boolean
+        windowId?: number
+        index?: number
         groupId?: number
+        pinned?: boolean
+        incognito?: boolean
         managed?: boolean
+        status?: string
     }>> {
         const result = await this.httpServer.sendCommand('tabs_list', {})
         return result as Array<{
@@ -75,8 +80,13 @@ export class ExtensionBridge {
             url: string;
             title: string;
             active: boolean;
+            windowId?: number;
+            index?: number;
             groupId?: number;
-            managed?: boolean
+            pinned?: boolean;
+            incognito?: boolean;
+            managed?: boolean;
+            status?: string;
         }>
     }
 
