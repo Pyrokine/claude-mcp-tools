@@ -9,6 +9,7 @@
  */
 
 import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 import {Client, ClientChannel, ConnectConfig, SFTPWrapper} from 'ssh2'
 import {ForwardManager} from './forward-manager.js'
@@ -48,7 +49,7 @@ export class SessionManager {
 
     constructor(persistPath?: string) {
         this.persistPath = persistPath || path.join(
-                           process.env.HOME || '/tmp',
+                           os.homedir(),
                            '.ssh-mcp-pro',
                            'sessions.json',
         )

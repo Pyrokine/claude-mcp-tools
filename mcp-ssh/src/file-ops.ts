@@ -4,6 +4,7 @@
 
 import {execSync} from 'child_process'
 import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 import {SFTPWrapper, Stats} from 'ssh2'
 import {sessionManager} from './session-manager.js'
@@ -382,7 +383,8 @@ async function syncWithRsync(
     // 检查本地是否有 rsync
     let hasLocalRsync = false
     try {
-        execSync('which rsync', {stdio: 'pipe'})
+        const cmd = os.platform() === 'win32' ? 'where rsync' : 'which rsync'
+        execSync(cmd, {stdio: 'pipe'})
         hasLocalRsync = true
     } catch {
     }
